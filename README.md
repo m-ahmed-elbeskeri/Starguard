@@ -1,7 +1,7 @@
 # ⭐ StarGuard: Trust Scores for GitHub Repositories
 
 **CLI tool** to detect fake-star campaigns, dependency hijacks, licence red flags, and other signals of open-source risk.  
-Inspired by the [4.5 million fake stars study](https://arxiv.org/abs/2404.18261), StarGuard helps **CTOs, security teams, and VCs** automate open-source due diligence in seconds.
+Inspired by the [4.5 million fake stars study]([https://arxiv.org/abs/2404.18261](https://arxiv.org/abs/2412.13459)), StarGuard helps **CTOs, security teams, and VCs** automate open-source due diligence in seconds.
 
 ---
 
