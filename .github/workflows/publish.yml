@@ -9,15 +9,24 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi-publish
     permissions:
-      id-token: write  
+      id-token: write
 
     steps:
     - uses: actions/checkout@v3
     
+    - name: Debugging - List files
+      run: |
+        echo "Current directory:"
+        pwd
+        echo "Files in repository root:"
+        ls -la
+        echo "Looking for pyproject.toml:"
+        find . -name pyproject.toml
+    
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.x'
+        python-version: '3.10'
         
     - name: Install build dependencies
       run: |
@@ -29,4 +38,3 @@ jobs:
       
     - name: Publish package
       uses: pypa/gh-action-pypi-publish@release/v1
-      
