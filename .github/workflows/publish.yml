@@ -13,15 +13,19 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0  # Get all history to ensure latest commits
     
-    - name: Debugging - List files
+    - name: Debug Repository Contents
       run: |
-        echo "Current directory:"
-        pwd
-        echo "Files in repository root:"
+        echo "Current directory: $(pwd)"
+        echo "List of files in repository root:"
         ls -la
-        echo "Looking for pyproject.toml:"
-        find . -name pyproject.toml
+        echo "Git commit hash: $(git rev-parse HEAD)"
+        echo "Latest commit on pyproject.toml:"
+        git log -1 --pretty=format:"%H %cd" -- pyproject.toml || echo "File not found in git"
+        echo "File content if exists:"
+        cat pyproject.toml || echo "File not found on disk"
     
     - name: Set up Python
       uses: actions/setup-python@v4
