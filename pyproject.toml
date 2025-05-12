@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "starguard"
+version = "0.1.0"
+description = "GitHub Repository Analysis Tool with Advanced Fake Star Detection"
+readme = "README.md"
+authors = [{name = "Mohamed Ahmed Elbeskeri", email = "mohamed.ahmed.4894@gmail.com"}]
+license = {text = "Apache-2.0"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+]
+keywords = ["github", "security", "analysis", "fake-stars", "repository"]
+requires-python = ">=3.8"
+dependencies = [
+    "requests",
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "matplotlib",
+    "networkx",
+    "python-dateutil",
+    "tqdm",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/yourusername/starguard"
+"Bug Tracker" = "https://github.com/yourusername/starguard/issues"
+
+[project.scripts]
+starguard = "starguard:main"
