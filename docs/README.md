@@ -75,17 +75,39 @@ python starguard.py https://github.com/vercel/next.js --burst-only
 ## 🖥 CLI Reference
 
 ```bash
-python starguard.py OWNER/REPO [options]
+Usage: starguard OWNER/REPO [OPTIONS] 
 
 Options:
-  -t, --token TEXT                GitHub token (or set GITHUB_TOKEN env)
+  -t, --token TEXT                GitHub personal access token
   -f, --format [text|json|markdown]  Output format (default: text)
-  -o, --output FILE              Write report to file
-  --plot FILE                    Save star-history PNG
-  --no-fake-stars                Skip Fake-Star analysis
-  --burst-only                   Only run burst detection
-  -v, --verbose                  Enable debug logging
+  -o, --output FILE                Output file (default: stdout)
+  -v, --verbose                    Enable verbose DEBUG logging
+  --plot FILE                      Save star history plot to specified file path
+  --no-fake-stars                  Skip fake star detection (faster)
+  --burst-only                     Only run burst detection (fastest)
+  --help                           Show this message and exit
 ```
+## 🔑 GitHub Token Requirements
+###Token Scopes & Permissions
+StarGuard works with different levels of GitHub token permissions:
+### Fine-Grained Personal Access Token (Recommended)
+For analyzing public repositories, you only need:
+
+* "Read-only access to public repositories"
+
+This minimal permission level is sufficient for most StarGuard features when analyzing public repositories.
+### Classic Personal Access Token
+If using a classic token, the following scopes are needed:
+
+* repo: For repository data access (or public_repo for public repositories only)
+* read:user: For analyzing user profiles (used in fake star detection)
+* read:org: Optional - helpful when analyzing organization repositories
+
+## Additional Notes
+
+* Traffic Data: To access repository traffic data (views, clones), you must have push access to the repository
+* Rate Limits: Using any token significantly increases your API rate limit (from 60 to 5,000 requests/hour)
+* No Token Mode: StarGuard can run without a token, but will have reduced API limits and some features may be limited
 
 ---
 
