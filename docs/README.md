@@ -64,10 +64,10 @@ flowchart TD
 export GITHUB_TOKEN=ghp_xxxxxxxxx
 
 # Full scan with star plot
-python starguard.cli pytorch/pytorch --format markdown --plot stars.png
+python -m starguard.cli pytorch/pytorch --format markdown --plot stars.png
 
 # Burst-only fast scan
-python starguard.cli https://github.com/vercel/next.js --burst-only
+python -m starguard.cli https://github.com/vercel/next.js --burst-only
 ```
 
 ---
