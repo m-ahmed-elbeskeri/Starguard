@@ -223,3 +223,58 @@ class GitHubApiMethods:
         # Cache the result for future use
         self.user_profile_cache[username] = user_data
         return user_data
+    
+    def check_user_repo_interaction(
+        self,
+        owner: str,
+        repo: str,
+        username: str
+    ) -> Dict[str, int]:
+        """
+        Check if a user has any prior interaction with a repository:
+        issues, pull requests, or commits authored by them.
+
+        Returns a summary dict with counts and a boolean flag.
+        """
+        # Initialize counts
+        commit_count = 0
+        issue_count = 0
+        pr_count = 0
+
+        # Check commits authored by the user
+        try:
+            commits = self.get_commits(owner, repo)
+            commit_count = sum(
+                1 for c in commits
+                if c.get('author', {}).get('login') == username
+            )
+        except Exception:
+            pass
+
+        # Check issues opened by the user
+        try:
+            issues = self.get_issues(owner, repo, state='all')
+            issue_count = sum(
+                1 for i in issues
+                if i.get('user', {}).get('login') == username
+            )
+        except Exception:
+            pass
+
+        # Check pull requests opened by the user
+        try:
+            prs = self.get_pulls(owner, repo, state='all')
+            pr_count = sum(
+                1 for p in prs
+                if p.get('user', {}).get('login') == username
+            )
+        except Exception:
+            pass
+
+        total_interactions = commit_count + issue_count + pr_count
+        return {
+            'has_any_interaction': total_interactions > 0,
+            'commit_count': commit_count,
+            'issue_count': issue_count,
+            'pr_count': pr_count,
+        }

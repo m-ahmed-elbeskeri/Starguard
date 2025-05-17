@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class StarAnalyzer:
     """Analyzes star patterns to detect anomalies."""
     
-    def __init__(self, owner: str, repo: str, stars_data: List[Dict], repo_created_date: str, github_api: GitHubAPI): # Made github_api non-optional
+    def __init__(self, owner: str, repo: str, stars_data: List[Dict], repo_created_date: str, github_api: GitHubAPI):
         self.owner = owner
         self.repo = repo
         self.stars_data = stars_data # This is raw data from get_stargazers
@@ -101,6 +101,63 @@ class StarAnalyzer:
         
         return result_df
 
+    def _detect_with_percentiles(self, percentiles=[5, 10, 25, 50, 75, 90, 95]) -> Dict:
+        """Detect anomalies using percentile analysis of star patterns"""
+        if self.df is None or self.df.empty or "stars" not in self.df.columns:
+            return {"percentile_analysis": "insufficient_data"}
+        
+        # Calculate percentiles of daily star counts
+        percentile_values = {}
+        for p in percentiles:
+            percentile_values[f"p{p}"] = float(np.percentile(self.df["stars"], p))
+        
+        # Detect unusual gaps between percentiles (sign of purchased stars)
+        anomalies = []
+        
+        # Check if there's an unusually large gap between higher percentiles
+        # This indicates a few days with extremely high star counts
+        if percentile_values["p95"] > 3 * percentile_values["p75"] and percentile_values["p95"] > 20:
+            anomalies.append({
+                "type": "high_percentile_gap",
+                "message": f"Large gap between 95th and 75th percentiles: {percentile_values['p95']} vs {percentile_values['p75']}",
+                "severity": "high"
+            })
+        
+        # Check if median is unusually low compared to mean (skewed distribution)
+        mean_stars = float(self.df["stars"].mean())
+        if mean_stars > 2 * percentile_values["p50"] and mean_stars > 5:
+            anomalies.append({
+                "type": "mean_median_gap",
+                "message": f"Mean ({mean_stars:.1f}) much higher than median ({percentile_values['p50']:.1f})",
+                "severity": "medium"
+            })
+        
+        # Calculate skewness (concentration of stars in few days)
+        if len(self.df) > 10 and percentile_values["p95"] > 0:
+            days_with_stars = len(self.df[self.df["stars"] > 0])
+            days_with_high_stars = len(self.df[self.df["stars"] > percentile_values["p75"]])
+            concentration_ratio = days_with_high_stars / max(1, days_with_stars)
+            
+            if concentration_ratio < 0.1 and percentile_values["p95"] > 20:
+                anomalies.append({
+                    "type": "star_concentration",
+                    "message": f"Stars concentrated in very few days ({days_with_high_stars} days with high activity)",
+                    "severity": "high"
+                })
+        
+        # Determine overall suspicion level from percentile analysis
+        suspicion_level = "low"
+        if any(a["severity"] == "high" for a in anomalies):
+            suspicion_level = "high"
+        elif any(a["severity"] == "medium" for a in anomalies):
+            suspicion_level = "medium"
+        
+        return {
+            "percentile_values": percentile_values,
+            "anomalies": anomalies,
+            "suspicion_level": suspicion_level
+        }
+
     def detect_anomalies(self) -> Dict:
         """Detect anomalies in star patterns using multiple methods."""
         if self.df is None or self.df.empty:
@@ -136,6 +193,9 @@ class StarAnalyzer:
         isolation_forest_anomalies_list = self._detect_with_isolation_forest()
         spike_anomalies_list = self._detect_spikes()
 
+        # NEW: Add percentile-based analysis
+        percentile_analysis = self._detect_with_percentiles()
+        
         all_found_anomalies = z_score_anomalies_list + isolation_forest_anomalies_list + \
                               spike_anomalies_list + mad_anomalies_list
         
@@ -154,15 +214,27 @@ class StarAnalyzer:
                 if anomaly["method"] not in existing_method:
                     unique_anomalies_by_date[anomaly_date_key]["method"] += f", {anomaly['method']}"
 
-
         unique_anomalies_list = sorted(list(unique_anomalies_by_date.values()), key=lambda x: x["date"], reverse=True)
 
         # Score: 0-50. Higher is better.
         # Max 10 anomalies reduce score by 5 each. More than 10 anomalies -> score 0.
         anomaly_penalty = len(unique_anomalies_list) * 5
+        
+        # NEW: Adjust penalty based on percentile analysis results
+        if percentile_analysis.get("suspicion_level") == "high":
+            anomaly_penalty += 15  # Additional penalty for high suspicion from percentiles
+        elif percentile_analysis.get("suspicion_level") == "medium":
+            anomaly_penalty += 7   # Additional penalty for medium suspicion
+            
         final_score = max(0, 50 - anomaly_penalty)
 
-        return {"anomalies": unique_anomalies_list, "score": final_score}
+        result = {
+            "anomalies": unique_anomalies_list, 
+            "score": final_score,
+            "percentile_analysis": percentile_analysis  # Include the percentile analysis in results
+        }
+        
+        return result
 
     def _detect_with_zscore(self, threshold: float = 3.0) -> List[Dict]:
         """Detect anomalies using Z-score method."""
@@ -268,7 +340,36 @@ class StarAnalyzer:
         
         try:
             # BurstDetector is already initialized in StarAnalyzer's __init__
-            return self.burst_detector.calculate_fake_star_index()
+            result = self.burst_detector.calculate_fake_star_index()
+            
+            # NEW: Add percentile analysis to enhance fake star detection
+            percentile_analysis = self._detect_with_percentiles()
+            
+            # Adjust fake star index based on percentile analysis
+            if percentile_analysis.get("suspicion_level") == "high":
+                base_fsi = result.get("fake_star_index", 0.0)
+                result["fake_star_index"] = min(1.0, base_fsi + 0.3)
+                
+                # If risk level needs upgrade based on new FSI
+                new_fsi = result["fake_star_index"]
+                if new_fsi >= 0.7 and result.get("risk_level") != "high":
+                    result["risk_level"] = "high"
+                elif new_fsi >= 0.4 and result.get("risk_level") == "low":
+                    result["risk_level"] = "medium"
+                    
+            elif percentile_analysis.get("suspicion_level") == "medium":
+                base_fsi = result.get("fake_star_index", 0.0)
+                result["fake_star_index"] = min(1.0, base_fsi + 0.15)
+                
+                # Potential risk level upgrade if near threshold
+                if result["fake_star_index"] >= 0.4 and result.get("risk_level") == "low":
+                    result["risk_level"] = "medium"
+            
+            # Add percentile analysis to the result
+            result["percentile_analysis"] = percentile_analysis
+            
+            return result
+            
         except Exception as e:
             logger.error(f"Error detecting fake stars for {self.owner}/{self.repo}: {str(e)}", exc_info=True)
             return {
@@ -322,5 +423,4 @@ class StarAnalyzer:
             plt.close()
 
         except Exception as e:
-            logger.error(f"Error plotting star history (StarAnalyzer fallback): {str(e)}", exc_info=True)
-
+            logger.error(f"Error plotting star history for {self.owner}/{self.repo}: {str(e)}", exc_info=True)
