@@ -32,8 +32,8 @@ dependencies = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/yourusername/starguard"
-"Bug Tracker" = "https://github.com/yourusername/starguard/issues"
+"Homepage" = "https://github.com/m-ahmed-elbeskeri/Starguard"
+"Bug Tracker" = "https://github.com/m-ahmed-elbeskeri/Starguard/issues"
 
 [project.scripts]
 starguard = "starguard:main"
