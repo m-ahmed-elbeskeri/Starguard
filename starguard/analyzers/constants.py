@@ -18,22 +18,37 @@ LICENSE_RISK_LEVELS = {
     "agpl-3.0": "high",
     "cc-by-nc-sa-4.0": "high",
     "proprietary": "high",
-    "unknown": "high",
+    "unknown": "high"
 }
 PACKAGE_MANAGERS = {
-    "javascript": {"file": "package.json", "dependencies_key": ["dependencies", "devDependencies"]},
+    "javascript": {
+        "file": "package.json",
+        "dependencies_key": ["dependencies", "devDependencies"]
+    },
     "python": {
         "file": "requirements.txt",
-        "pattern": r"^([\w\-\._]+).*?(?:==|>=|<=|~=|!=|>|<)?\s*([\d\.\w\-]+)?.*$",
+        "pattern": r"^([\w\-\._]+).*?(?:==|>=|<=|~=|!=|>|<)?\s*([\d\.\w\-]+)?.*$"
     },
-    "python_pipfile": {"file": "Pipfile", "section_marker": "[packages]"},
-    "python_poetry": {"file": "pyproject.toml", "section_marker": "[tool.poetry.dependencies]"},
-    "ruby": {"file": "Gemfile", "pattern": r"gem\s+['\"]([^'\"]+)['\"](?:,\s*['\"](.+)['\"])?"},
+    "python_pipfile": {
+        "file": "Pipfile",
+        "section_marker": "[packages]"
+    },
+    "python_poetry": {
+        "file": "pyproject.toml",
+        "section_marker": "[tool.poetry.dependencies]"
+    },
+    "ruby": {
+        "file": "Gemfile",
+        "pattern": r"gem\s+['\"]([^'\"]+)['\"](?:,\s*['\"](.+)['\"])?"
+    },
     "java": {
         "file": "pom.xml",
-        "tag_pattern": r"<dependency>\s*<groupId>([^<]+)</groupId>\s*<artifactId>([^<]+)</artifactId>\s*(?:<version>([^<]+)</version>)?",
+        "tag_pattern": r"<dependency>\s*<groupId>([^<]+)</groupId>\s*<artifactId>([^<]+)</artifactId>\s*(?:<version>([^<]+)</version>)?"
     },
-    "go": {"file": "go.mod", "pattern": r"^\s*require\s+([^\s]+)\s+v?([^\s]+)"},
+    "go": {
+        "file": "go.mod",
+        "pattern": r"^\s*require\s+([^\s]+)\s+v?([^\s]+)"
+    }
 }
 
 # Constants for fake star detection
@@ -42,7 +57,7 @@ WINDOW_SIZE = 28  # Days for sliding window in MAD calculation
 MIN_STAR_COUNT = 30  # Minimum star count before using MAD detection
 MIN_STARS_GROWTH_PERCENT = 300  # Alternative % growth threshold for small repos
 
-# Fake star user scoring weights
+# Fake star user scoring weights - UPDATED
 USER_SCORE_THRESHOLDS = {
     "account_age_days": (30, 2.0),  # (threshold, score if below threshold)
     "followers": (5, 1.0),
@@ -50,8 +65,25 @@ USER_SCORE_THRESHOLDS = {
     "total_stars": (3, 1.0),
     "prior_interaction": (0, 1.0),  # 0 = no prior interaction
     "default_avatar": (True, 0.5),  # True = has default avatar
+    # New features
+    "longest_inactivity": (90, 1.0),  # Days between any two public events
+    "contribution_gini": (0.6, 1.0),  # Gini coefficient of events across calendar weeks
+    "lockstep_score": (0.05, 2.0),  # Density of user clustering
+    "tod_entropy": (1.5, 1.0)  # Shannon entropy of hour-of-day distribution
 }
-FAKE_USER_THRESHOLD = 4.0  # Score threshold to flag a user as likely fake
+
+# Lock-step detection settings
+LOCKSTEP_DETECTION = {
+    "eps": 0.2,          # DBSCAN distance cut-off
+    "min_samples": 4,    # Minimum cluster size
+    "max_users": 10000   # Maximum users to analyze for lockstep
+}
+
+# Avatar hash comparison settings
+AVATAR_HASH_DISTANCE = 8  # Perceptual hash distance threshold for similar avatars
+AVATAR_MATCH_SCORE = 0.5  # Score to add for avatar reuse detection
+
+FAKE_USER_THRESHOLD = 5.0  # Score threshold to flag a user as likely fake
 
 # Burst scoring weights
 FAKE_RATIO_WEIGHT = 0.7

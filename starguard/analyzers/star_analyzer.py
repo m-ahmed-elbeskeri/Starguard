@@ -7,12 +7,13 @@ from typing import Dict, List, Optional, Union
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from dateutil.parser import parse as parse_date
 
 from starguard.api.github_api import GitHubAPI
-from starguard.analyzers.burst_detector import BurstDetector
+from starguard.analyzers.burst_detector import BurstDetector, _gini, _entropy
 from starguard.utils.date_utils import make_naive_datetime
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ class StarAnalyzer:
                             {
                                 "date": dt_obj,  # Keep as datetime objects
                                 "user": star_entry.get("user", {}).get("login"),
+                                "hour": dt_obj.hour,  # Add hour for time-of-day analysis
                             }
                         )
             except Exception as e:
@@ -111,6 +113,17 @@ class StarAnalyzer:
         result_df["day_of_week"] = result_df["date"].dt.dayofweek
         result_df["is_weekend"] = result_df["day_of_week"].isin([5, 6]).astype(int)
 
+        # Calculate time-of-day entropy (daily df doesn't have hours, use original records)
+        hours = [r["hour"] for r in records]
+        tod_entropy = _entropy(hours)
+        result_df["tod_entropy"] = tod_entropy
+
+        # Calculate contribution dispersion with Gini coefficient (weekly)
+        week_numbers = [r["date"].isocalendar()[1] for r in records]
+        week_counts = pd.Series(week_numbers).value_counts()
+        contribution_gini = _gini(week_counts.values)
+        result_df["contribution_gini"] = contribution_gini
+        
         # Rolling windows - ensure enough data points for window, else NaNs are fine.
         if len(result_df) >= 3:
             result_df["rolling_3d"] = result_df["stars"].rolling(window=3, min_periods=1).mean()
@@ -179,6 +192,26 @@ class StarAnalyzer:
                         "severity": "high",
                     }
                 )
+                
+        # NEW: Check for low time-of-day entropy
+        if hasattr(self.df, "tod_entropy") and self.df["tod_entropy"].iloc[0] < 1.5:
+            anomalies.append(
+                {
+                    "type": "low_tod_entropy",
+                    "message": f"Time-of-day entropy is only {self.df['tod_entropy'].iloc[0]:.2f}, suggesting stars were added at similar times",
+                    "severity": "high"
+                }
+            )
+            
+        # NEW: Check for high contribution Gini coefficient
+        if hasattr(self.df, "contribution_gini") and self.df["contribution_gini"].iloc[0] > 0.6:
+            anomalies.append(
+                {
+                    "type": "high_contribution_gini",
+                    "message": f"Contribution Gini coefficient is {self.df['contribution_gini'].iloc[0]:.2f}, suggesting stars are bunched rather than spread out naturally",
+                    "severity": "medium"
+                }
+            )
 
         # Determine overall suspicion level from percentile analysis
         suspicion_level = "low"
@@ -191,6 +224,8 @@ class StarAnalyzer:
             "percentile_values": percentile_values,
             "anomalies": anomalies,
             "suspicion_level": suspicion_level,
+            "tod_entropy": self.df["tod_entropy"].iloc[0] if hasattr(self.df, "tod_entropy") and not self.df.empty else None,
+            "contribution_gini": self.df["contribution_gini"].iloc[0] if hasattr(self.df, "contribution_gini") and not self.df.empty else None
         }
 
     def detect_anomalies(self) -> Dict:
@@ -276,6 +311,16 @@ class StarAnalyzer:
             anomaly_penalty += 15  # Additional penalty for high suspicion from percentiles
         elif percentile_analysis.get("suspicion_level") == "medium":
             anomaly_penalty += 7  # Additional penalty for medium suspicion
+            
+        # NEW: Time-of-day entropy penalty
+        tod_entropy = percentile_analysis.get("tod_entropy")
+        if tod_entropy is not None and tod_entropy < 1.5:
+            anomaly_penalty += 10  # Significant penalty for low tod entropy
+            
+        # NEW: Contribution Gini coefficient penalty
+        gini = percentile_analysis.get("contribution_gini")
+        if gini is not None and gini > 0.6:
+            anomaly_penalty += 7  # Penalty for bunched contributions
 
         final_score = max(0, 50 - anomaly_penalty)
 
@@ -283,6 +328,8 @@ class StarAnalyzer:
             "anomalies": unique_anomalies_list,
             "score": final_score,
             "percentile_analysis": percentile_analysis,  # Include the percentile analysis in results
+            "tod_entropy": tod_entropy,
+            "contribution_gini": gini
         }
 
         return result
@@ -412,7 +459,7 @@ class StarAnalyzer:
         ]
 
     def detect_fake_stars(self) -> Dict:
-        """Detect fake stars using the repository-only approach with BurstDetector."""
+        """Detect fake stars using the enhanced approach with BurstDetector."""
         if not self.github_api:  # Should not happen if constructor enforces it
             return {
                 "has_fake_stars": False,
@@ -424,31 +471,33 @@ class StarAnalyzer:
             # BurstDetector is already initialized in StarAnalyzer's __init__
             result = self.burst_detector.calculate_fake_star_index()
 
-            # NEW: Add percentile analysis to enhance fake star detection
+            # Additional analysis from StarAnalyzer
             percentile_analysis = self._detect_with_percentiles()
-
-            # Adjust fake star index based on percentile analysis
-            if percentile_analysis.get("suspicion_level") == "high":
+            
+            # Adjust fake star index based on new features
+            if percentile_analysis.get("tod_entropy") is not None and percentile_analysis.get("tod_entropy") < 1.5:
                 base_fsi = result.get("fake_star_index", 0.0)
-                result["fake_star_index"] = min(1.0, base_fsi + 0.3)
-
+                result["fake_star_index"] = min(1.0, base_fsi + 0.2)  # Significant boost for suspicious timing
+                
                 # If risk level needs upgrade based on new FSI
                 new_fsi = result["fake_star_index"]
                 if new_fsi >= 0.7 and result.get("risk_level") != "high":
                     result["risk_level"] = "high"
                 elif new_fsi >= 0.4 and result.get("risk_level") == "low":
                     result["risk_level"] = "medium"
-
-            elif percentile_analysis.get("suspicion_level") == "medium":
+            
+            if percentile_analysis.get("contribution_gini") is not None and percentile_analysis.get("contribution_gini") > 0.6:
                 base_fsi = result.get("fake_star_index", 0.0)
-                result["fake_star_index"] = min(1.0, base_fsi + 0.15)
-
+                result["fake_star_index"] = min(1.0, base_fsi + 0.15)  # Boost for suspicious contribution pattern
+                
                 # Potential risk level upgrade if near threshold
                 if result["fake_star_index"] >= 0.4 and result.get("risk_level") == "low":
                     result["risk_level"] = "medium"
 
             # Add percentile analysis to the result
             result["percentile_analysis"] = percentile_analysis
+            result["tod_entropy"] = percentile_analysis.get("tod_entropy")
+            result["contribution_gini"] = percentile_analysis.get("contribution_gini")
 
             return result
 
@@ -523,6 +572,21 @@ class StarAnalyzer:
                     zorder=5,
                 )
 
+            # Add time-of-day entropy annotation
+            if "tod_entropy" in self.df.columns and not self.df.empty:
+                tod_entropy_val = self.df["tod_entropy"].iloc[0]
+                tod_color = "green" if tod_entropy_val >= 1.5 else "red"
+                ax.text(0.02, 0.02, f"Time-of-day entropy: {tod_entropy_val:.2f}", 
+                        transform=ax.transAxes, color=tod_color, fontsize=9,bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="gray", alpha=0.7))
+            
+            # Add contribution gini annotation
+            if "contribution_gini" in self.df.columns and not self.df.empty:
+                gini_val = self.df["contribution_gini"].iloc[0]
+                gini_color = "green" if gini_val < 0.6 else "red"
+                ax.text(0.02, 0.07, f"Contribution Gini: {gini_val:.2f}", 
+                        transform=ax.transAxes, color=gini_color, fontsize=9,
+                        bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="gray", alpha=0.7))
+
             ax.set_title(f"Star History for {self.owner}/{self.repo}", fontsize=14)
             ax.set_xlabel("Date", fontsize=12)
             ax.set_ylabel("Stars per Day", fontsize=12)
@@ -542,3 +606,170 @@ class StarAnalyzer:
             logger.error(
                 f"Error plotting star history for {self.owner}/{self.repo}: {str(e)}", exc_info=True
             )
+            
+    def detect_fake_stars_enhanced(self) -> Dict:
+        """
+        Enhanced fake star detection that combines the new features from BurstDetector
+        with additional analysis from StarAnalyzer.
+        """
+        # Use BurstDetector's analysis as the base
+        result = self.detect_fake_stars()
+        
+        # Extract time-of-day entropy and contribution dispersion from our analysis
+        if self.df is not None and not self.df.empty:
+            tod_entropy_val = self.df["tod_entropy"].iloc[0] if "tod_entropy" in self.df.columns else None 
+            gini_val = self.df["contribution_gini"].iloc[0] if "contribution_gini" in self.df.columns else None
+            
+            # Apply additional penalties for suspicious patterns
+            base_fsi = result.get("fake_star_index", 0.0)
+            penalty_applied = False
+            
+            if tod_entropy_val is not None and tod_entropy_val < 1.5:
+                result["fake_star_index"] = min(1.0, base_fsi + 0.2)
+                penalty_applied = True
+                
+            if gini_val is not None and gini_val > 0.6:
+                if penalty_applied:
+                    # Apply smaller additional penalty if we already penalized for tod_entropy
+                    result["fake_star_index"] = min(1.0, result["fake_star_index"] + 0.1)
+                else:
+                    result["fake_star_index"] = min(1.0, base_fsi + 0.15)
+                    penalty_applied = True
+            
+            # Update risk level based on adjusted fake star index
+            fsi = result.get("fake_star_index", 0.0)
+            if fsi >= 0.6:
+                result["risk_level"] = "high"
+            elif fsi >= 0.3:
+                result["risk_level"] = "medium"
+            else:
+                result["risk_level"] = "low"
+            
+            # Add additional details to the result
+            result["enhanced_analysis"] = {
+                "tod_entropy": tod_entropy_val,
+                "contribution_gini": gini_val,
+                "lockstep_detection_used": True,
+                "penalty_applied": penalty_applied
+            }
+            
+        return result
+            
+    def analyze_lockstep_behavior(self, max_users=1000) -> Dict:
+        """
+        Analyzes lock-step behavior among stargazers.
+        
+        Returns details about clusters of users who star repositories in a coordinated pattern.
+        This is a strong indicator of fake/purchased stars.
+        """
+        if not self.stars_data:
+            return {
+                "status": "error",
+                "message": "No star data available",
+                "clusters": []
+            }
+            
+        # Extract usernames from star data
+        users = [s.get("user", {}).get("login") for s in self.stars_data if s.get("user")]
+        users = [u for u in users if u]  # Filter out None/empty
+        
+        # Limit to max_users for performance
+        if len(users) > max_users:
+            users = users[:max_users]
+            
+        # Build mapping of user to their starred repos
+        user_to_repos = {}
+        for username in users:
+            try:
+                starred_repos = self.github_api.list_starred_repos(username, limit=200)
+                user_to_repos[username] = {r["full_name"] for r in starred_repos 
+                                          if r["full_name"] != f"{self.owner}/{self.repo}"}
+            except Exception as e:
+                logger.debug(f"Error getting starred repos for {username}: {str(e)}")
+                user_to_repos[username] = set()
+                
+        # Use the LockStepDetector from BurstDetector module
+        from starguard.analyzers.burst_detector import LockStepDetector
+        
+        detector = LockStepDetector(user_to_repos)
+        cluster_scores = detector.cluster_scores()
+        
+        # Find users in suspicious clusters
+        suspicious_users = [u for u, score in cluster_scores.items() if score > 0.05]
+        
+        # Group users by cluster
+        from sklearn.cluster import DBSCAN
+        from scipy.sparse import coo_matrix
+        import numpy as np
+        
+        if not suspicious_users:
+            return {
+                "status": "success",
+                "message": "No suspicious clusters detected",
+                "clusters": [],
+                "suspicious_users_count": 0,
+                "total_users_analyzed": len(users)
+            }
+        
+        # Build distance matrix for just suspicious users
+        suspicious_user_repos = {u: user_to_repos[u] for u in suspicious_users}
+        users_list = list(suspicious_user_repos.keys())
+        idx = {u: i for i, u in enumerate(users_list)}
+        m = len(users_list)
+        
+        # Build sparse Jaccard distance matrix
+        rows, cols, dists = [], [], []
+        for i, u in enumerate(users_list):
+            repos_u = suspicious_user_repos[u]
+            for v in users_list[i + 1:]:
+                inter = repos_u & suspicious_user_repos[v]
+                if not inter:
+                    continue
+                union = repos_u | suspicious_user_repos[v]
+                dist = 1.0 - len(inter) / len(union)
+                rows.append(i)
+                cols.append(idx[v])
+                dists.append(dist)
+                
+        # Build symmetric condensed distance matrix
+        dm = coo_matrix((dists + dists,  # mirror upper triangle
+                        (rows + cols, cols + rows)),
+                        shape=(m, m)).toarray()
+        np.fill_diagonal(dm, 0.0)
+        
+        # Cluster suspicious users
+        clustering = DBSCAN(eps=0.2, min_samples=4, metric="precomputed").fit(dm)
+        
+        # Group by cluster
+        labels = clustering.labels_
+        clusters = {}
+        for user, label in zip(users_list, labels):
+            if label == -1:  # Noise points
+                continue
+            if label not in clusters:
+                clusters[label] = []
+            clusters[label].append({
+                "username": user,
+                "lockstep_score": cluster_scores[user]
+            })
+            
+        # Format cluster data
+        cluster_data = []
+        for label, users in clusters.items():
+            cluster_data.append({
+                "id": int(label),
+                "size": len(users),
+                "users": users,
+                "avg_lockstep_score": sum(u["lockstep_score"] for u in users) / len(users)
+            })
+            
+        # Sort clusters by size
+        cluster_data.sort(key=lambda c: c["size"], reverse=True)
+        
+        return {
+            "status": "success",
+            "suspicious_users_count": len(suspicious_users),
+            "total_users_analyzed": len(users),
+            "clusters": cluster_data,
+            "lockstep_threshold": 0.05
+        }

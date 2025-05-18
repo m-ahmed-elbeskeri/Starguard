@@ -135,6 +135,12 @@ class GitHubGraphQLMethods:
                   login
                   avatarUrl
                   createdAt
+                  followers {
+                    totalCount
+                  }
+                  repositories {
+                    totalCount
+                  }
                 }
               }
             }
@@ -145,6 +151,8 @@ class GitHubGraphQLMethods:
         variables = {"owner": owner, "repo": repo, "cursor": None}
         stars = []
         page_count = 0
+        error_count = 0
+        max_errors = 3
 
         # GraphQL pagination
         while True:
@@ -152,7 +160,11 @@ class GitHubGraphQLMethods:
 
             if "errors" in result or "data" not in result:
                 logger.warning(f"Error fetching stargazers via GraphQL for {owner}/{repo}")
-                break
+                error_count += 1
+                if error_count >= max_errors:
+                    logger.error(f"Too many GraphQL errors, aborting stargazer fetch after {error_count} errors")
+                    break
+                continue  # Try again with same cursor
 
             repo_data = result["data"].get("repository", {})
             stargazers_data = repo_data.get("stargazers", {})
@@ -170,6 +182,8 @@ class GitHubGraphQLMethods:
                             "login": user_node.get("login"),
                             "avatar_url": user_node.get("avatarUrl"),
                             "created_at": user_node.get("createdAt"),
+                            "followers_count": user_node.get("followers", {}).get("totalCount", 0),
+                            "public_repos": user_node.get("repositories", {}).get("totalCount", 0),
                         },
                     }
                 )

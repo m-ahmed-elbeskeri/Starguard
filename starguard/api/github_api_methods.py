@@ -264,3 +264,185 @@ class GitHubApiMethods:
             "issue_count": issue_count,
             "pr_count": pr_count,
         }
+
+    def list_user_events(self, username: str, per_page: int = 30) -> List[Dict]:
+        """
+        Get a list of events performed by a user.
+        
+        Retrieves the most recent events performed by the specified user.
+        This is used to analyze user activity patterns.
+        
+        Args:
+            username: GitHub username
+            per_page: Number of events per page (max 100)
+            
+        Returns:
+            List[Dict]: List of event data
+        """
+        logger.debug(f"Fetching events for user {username}")
+        endpoint = f"/users/{username}/events"
+        params = {"per_page": min(per_page, 100)}
+        
+        try:
+            events = self.paginate(endpoint, params=params)
+            logger.debug(f"Retrieved {len(events)} events for user {username}")
+            return events
+        except Exception as e:
+            logger.warning(f"Error fetching events for user {username}: {e}")
+            return []
+
+    def list_starred_repos(self, username: str, limit: int = 100) -> List[Dict]:
+        """
+        Get repositories starred by a user.
+        
+        Retrieves a list of repositories that have been starred by the
+        specified user. Used to analyze star patterns and detect coordinated activity.
+        
+        Args:
+            username: GitHub username
+            limit: Maximum number of repos to return
+            
+        Returns:
+            List[Dict]: List of starred repository data
+        """
+        logger.debug(f"Fetching starred repos for user {username}")
+        endpoint = f"/users/{username}/starred"
+        params = {"per_page": min(limit, 100)}
+        
+        try:
+            starred = self.paginate(endpoint, params=params, max_items=limit)
+            logger.debug(f"Retrieved {len(starred)} starred repos for user {username}")
+            return starred
+        except Exception as e:
+            logger.warning(f"Error fetching starred repos for user {username}: {e}")
+            return []
+
+    def has_user_interacted(self, username: str, owner: str, repo: str) -> bool:
+        """
+        Check if a user has interacted with a repository before starring it.
+        
+        This is a simplified version of check_user_repo_interaction that returns
+        just a boolean value. Used to identify users who star without any prior interaction.
+        
+        Args:
+            username: GitHub username
+            owner: Repository owner
+            repo: Repository name
+            
+        Returns:
+            bool: True if user has interacted with the repository, False otherwise
+        """
+        interaction_data = self.check_user_repo_interaction(owner, repo, username)
+        return interaction_data.get("has_any_interaction", False)
+
+    def get_traffic_views(self, owner: str, repo: str) -> Dict:
+        """
+        Get repository traffic view data.
+        
+        Retrieves view statistics for the specified repository.
+        Requires push access to the repository.
+        
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            
+        Returns:
+            Dict: Repository traffic view data
+        """
+        logger.debug(f"Fetching traffic views for {owner}/{repo}")
+        endpoint = f"/repos/{owner}/{repo}/traffic/views"
+        
+        try:
+            view_data = self.request(endpoint)
+            if "error" in view_data:
+                logger.warning(f"Error fetching traffic views for {owner}/{repo}: {view_data.get('error')}")
+                return {"views": []}
+            return view_data
+        except Exception as e:
+            logger.warning(f"Error fetching traffic views for {owner}/{repo}: {e}")
+            return {"views": []}
+
+    def get_users_bulk(self, usernames: List[str]) -> Dict[str, Dict]:
+        """
+        Get profile information for multiple users efficiently.
+        
+        Retrieves profile data for multiple GitHub users in bulk,
+        using cached results when available to minimize API calls.
+        
+        Args:
+            usernames: List of GitHub usernames
+            
+        Returns:
+            Dict[str, Dict]: Mapping of username to profile data
+        """
+        result = {}
+        for username in usernames:
+            result[username] = self.get_user(username)
+        return result
+
+    def paginate(self, endpoint: str, params: Optional[Dict] = None, max_items: Optional[int] = None) -> List[Dict]:
+        """
+        Retrieve all pages of results for a paginated API endpoint.
+        
+        Automatically handles GitHub's pagination to retrieve all results,
+        or up to max_items if specified.
+        
+        Args:
+            endpoint: API endpoint path
+            params: URL query parameters
+            max_items: Maximum number of items to retrieve across all pages
+            
+        Returns:
+            List[Dict]: Combined results from all retrieved pages
+        """
+        # Initialize parameters for pagination
+        params = params or {}
+        if "per_page" not in params:
+            params["per_page"] = 100  # Max items per page in GitHub API
+        
+        results = []
+        page = 1
+        
+        while True:
+            # Update params for current page
+            page_params = params.copy()
+            page_params["page"] = page
+            
+            # Make the request for this page
+            response = self.request(endpoint, params=page_params)
+            
+            # Handle errors
+            if isinstance(response, dict) and "error" in response:
+                if response.get("status_code") == 404:
+                    # Resource not found, return empty list
+                    return []
+                # Other error, log and return what we have so far
+                logger.warning(f"Error during pagination for {endpoint}: {response.get('error')}")
+                break
+            
+            # No items returned, we've reached the end
+            if not response or (isinstance(response, list) and len(response) == 0):
+                break
+            
+            # Add this page's results
+            if isinstance(response, list):
+                results.extend(response)
+            else:
+                # If response is not a list, it's likely an error or unexpected format
+                logger.warning(f"Unexpected response format during pagination for {endpoint}")
+                break
+            
+            # Check if we've reached max_items
+            if max_items and len(results) >= max_items:
+                results = results[:max_items]  # Truncate to max_items
+                break
+            
+            # Check if we have a next page
+            if len(response) < params["per_page"]:
+                # Received fewer items than requested per page, must be the last page
+                break
+            
+            # Move to next page
+            page += 1
+        
+        return results

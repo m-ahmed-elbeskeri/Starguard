@@ -57,16 +57,33 @@ WINDOW_SIZE = 28  # Days for sliding window in MAD calculation
 MIN_STAR_COUNT = 30  # Minimum star count before using MAD detection
 MIN_STARS_GROWTH_PERCENT = 300  # Alternative % growth threshold for small repos
 
-# Fake star user scoring weights
+# Fake star user scoring weights - UPDATED
 USER_SCORE_THRESHOLDS = {
     "account_age_days": (30, 2.0),  # (threshold, score if below threshold)
     "followers": (5, 1.0),
     "public_repos": (2, 1.0),
     "total_stars": (3, 1.0),
     "prior_interaction": (0, 1.0),  # 0 = no prior interaction
-    "default_avatar": (True, 0.5)  # True = has default avatar
+    "default_avatar": (True, 0.5),  # True = has default avatar
+    # New features
+    "longest_inactivity": (90, 1.0),  # Days between any two public events
+    "contribution_gini": (0.6, 1.0),  # Gini coefficient of events across calendar weeks
+    "lockstep_score": (0.05, 2.0),  # Density of user clustering
+    "tod_entropy": (1.5, 1.0)  # Shannon entropy of hour-of-day distribution
 }
-FAKE_USER_THRESHOLD = 4.0  # Score threshold to flag a user as likely fake
+
+# Lock-step detection settings
+LOCKSTEP_DETECTION = {
+    "eps": 0.2,          # DBSCAN distance cut-off
+    "min_samples": 4,    # Minimum cluster size
+    "max_users": 10000   # Maximum users to analyze for lockstep
+}
+
+# Avatar hash comparison settings
+AVATAR_HASH_DISTANCE = 8  # Perceptual hash distance threshold for similar avatars
+AVATAR_MATCH_SCORE = 0.5  # Score to add for avatar reuse detection
+
+FAKE_USER_THRESHOLD = 5.0  # Score threshold to flag a user as likely fake
 
 # Burst scoring weights
 FAKE_RATIO_WEIGHT = 0.7
@@ -76,11 +93,11 @@ RULE_HITS_WEIGHT = 0.3
 BURST_ORGANIC_THRESHOLD = 0.3
 BURST_FAKE_THRESHOLD = 0.6
 
-# License compatibility matrix 
+# License compatibility matrix
 # 'compatible' - No license conflict
 # 'conditional' - Compatible under certain conditions
 # 'incompatible' - License conflict exists
-# TODO: Needs a proper check 
+# TODO: Needs a proper check
 
 LICENSE_COMPATIBILITY = {
     # MIT License compatibility
@@ -99,24 +116,22 @@ LICENSE_COMPATIBILITY = {
     ("mit", "unlicense"): "compatible",
     ("mit", "cc0-1.0"): "compatible",
     ("mit", "isc"): "compatible",
-    
     # Apache 2.0 License compatibility
     ("apache-2.0", "mit"): "compatible",
     ("apache-2.0", "apache-2.0"): "compatible",
     ("apache-2.0", "bsd-2-clause"): "compatible",
     ("apache-2.0", "bsd-3-clause"): "compatible",
     ("apache-2.0", "gpl-2.0"): "incompatible",  # Apache 2.0 is incompatible with GPLv2
-    ("apache-2.0", "gpl-3.0"): "compatible",    # Apache 2.0 is compatible with GPLv3
-    ("apache-2.0", "lgpl-2.1"): "incompatible", # Same incompatibility with LGPLv2.1
-    ("apache-2.0", "lgpl-3.0"): "compatible",   # Compatible with LGPLv3
-    ("apache-2.0", "agpl-3.0"): "compatible",   # Compatible with AGPLv3
+    ("apache-2.0", "gpl-3.0"): "compatible",  # Apache 2.0 is compatible with GPLv3
+    ("apache-2.0", "lgpl-2.1"): "incompatible",  # Same incompatibility with LGPLv2.1
+    ("apache-2.0", "lgpl-3.0"): "compatible",  # Compatible with LGPLv3
+    ("apache-2.0", "agpl-3.0"): "compatible",  # Compatible with AGPLv3
     ("apache-2.0", "mpl-2.0"): "compatible",
     ("apache-2.0", "epl-2.0"): "conditional",  # Potentially compatible but with conditions
     ("apache-2.0", "cddl-1.0"): "conditional",
     ("apache-2.0", "unlicense"): "compatible",
     ("apache-2.0", "cc0-1.0"): "compatible",
     ("apache-2.0", "isc"): "compatible",
-    
     # BSD 2-Clause License compatibility
     ("bsd-2-clause", "mit"): "compatible",
     ("bsd-2-clause", "apache-2.0"): "compatible",
@@ -133,7 +148,6 @@ LICENSE_COMPATIBILITY = {
     ("bsd-2-clause", "unlicense"): "compatible",
     ("bsd-2-clause", "cc0-1.0"): "compatible",
     ("bsd-2-clause", "isc"): "compatible",
-    
     # BSD 3-Clause License compatibility
     ("bsd-3-clause", "mit"): "compatible",
     ("bsd-3-clause", "apache-2.0"): "compatible",
@@ -150,14 +164,16 @@ LICENSE_COMPATIBILITY = {
     ("bsd-3-clause", "unlicense"): "compatible",
     ("bsd-3-clause", "cc0-1.0"): "compatible",
     ("bsd-3-clause", "isc"): "compatible",
-    
     # GPL-2.0 License compatibility
-    ("gpl-2.0", "mit"): "incompatible",     # GPL code cannot be included in MIT projects
+    ("gpl-2.0", "mit"): "incompatible",  # GPL code cannot be included in MIT projects
     ("gpl-2.0", "apache-2.0"): "incompatible",
     ("gpl-2.0", "bsd-2-clause"): "incompatible",
     ("gpl-2.0", "bsd-3-clause"): "incompatible",
     ("gpl-2.0", "gpl-2.0"): "compatible",
-    ("gpl-2.0", "gpl-3.0"): "incompatible", # GPLv2 code cannot be included in GPLv3 without explicit permission
+    (
+        "gpl-2.0",
+        "gpl-3.0",
+    ): "incompatible",  # GPLv2 code cannot be included in GPLv3 without explicit permission
     ("gpl-2.0", "lgpl-2.1"): "compatible",
     ("gpl-2.0", "lgpl-3.0"): "incompatible",
     ("gpl-2.0", "agpl-3.0"): "incompatible",
@@ -167,13 +183,12 @@ LICENSE_COMPATIBILITY = {
     ("gpl-2.0", "unlicense"): "incompatible",
     ("gpl-2.0", "cc0-1.0"): "incompatible",
     ("gpl-2.0", "isc"): "incompatible",
-    
     # GPL-3.0 License compatibility
-    ("gpl-3.0", "mit"): "incompatible",     # GPL code cannot be included in MIT projects
+    ("gpl-3.0", "mit"): "incompatible",  # GPL code cannot be included in MIT projects
     ("gpl-3.0", "apache-2.0"): "incompatible",
     ("gpl-3.0", "bsd-2-clause"): "incompatible",
     ("gpl-3.0", "bsd-3-clause"): "incompatible",
-    ("gpl-3.0", "gpl-2.0"): "incompatible", # GPLv3 cannot be included in GPLv2 projects
+    ("gpl-3.0", "gpl-2.0"): "incompatible",  # GPLv3 cannot be included in GPLv2 projects
     ("gpl-3.0", "gpl-3.0"): "compatible",
     ("gpl-3.0", "lgpl-2.1"): "incompatible",
     ("gpl-3.0", "lgpl-3.0"): "compatible",
@@ -184,7 +199,6 @@ LICENSE_COMPATIBILITY = {
     ("gpl-3.0", "unlicense"): "incompatible",
     ("gpl-3.0", "cc0-1.0"): "incompatible",
     ("gpl-3.0", "isc"): "incompatible",
-    
     # LGPL-2.1 License compatibility
     ("lgpl-2.1", "mit"): "incompatible",
     ("lgpl-2.1", "apache-2.0"): "incompatible",
@@ -201,7 +215,6 @@ LICENSE_COMPATIBILITY = {
     ("lgpl-2.1", "unlicense"): "incompatible",
     ("lgpl-2.1", "cc0-1.0"): "incompatible",
     ("lgpl-2.1", "isc"): "incompatible",
-    
     # LGPL-3.0 License compatibility
     ("lgpl-3.0", "mit"): "incompatible",
     ("lgpl-3.0", "apache-2.0"): "incompatible",
@@ -218,14 +231,13 @@ LICENSE_COMPATIBILITY = {
     ("lgpl-3.0", "unlicense"): "incompatible",
     ("lgpl-3.0", "cc0-1.0"): "incompatible",
     ("lgpl-3.0", "isc"): "incompatible",
-    
     # AGPL-3.0 License compatibility
     ("agpl-3.0", "mit"): "incompatible",
     ("agpl-3.0", "apache-2.0"): "incompatible",
     ("agpl-3.0", "bsd-2-clause"): "incompatible",
     ("agpl-3.0", "bsd-3-clause"): "incompatible",
     ("agpl-3.0", "gpl-2.0"): "incompatible",
-    ("agpl-3.0", "gpl-3.0"): "incompatible", # AGPL is more restrictive than GPL
+    ("agpl-3.0", "gpl-3.0"): "incompatible",  # AGPL is more restrictive than GPL
     ("agpl-3.0", "lgpl-2.1"): "incompatible",
     ("agpl-3.0", "lgpl-3.0"): "incompatible",
     ("agpl-3.0", "agpl-3.0"): "compatible",
@@ -235,7 +247,6 @@ LICENSE_COMPATIBILITY = {
     ("agpl-3.0", "unlicense"): "incompatible",
     ("agpl-3.0", "cc0-1.0"): "incompatible",
     ("agpl-3.0", "isc"): "incompatible",
-    
     # MPL-2.0 License compatibility
     ("mpl-2.0", "mit"): "compatible",
     ("mpl-2.0", "apache-2.0"): "compatible",
@@ -252,7 +263,6 @@ LICENSE_COMPATIBILITY = {
     ("mpl-2.0", "unlicense"): "compatible",
     ("mpl-2.0", "cc0-1.0"): "compatible",
     ("mpl-2.0", "isc"): "compatible",
-    
     # EPL-2.0 License compatibility
     ("epl-2.0", "mit"): "conditional",
     ("epl-2.0", "apache-2.0"): "conditional",
@@ -269,7 +279,6 @@ LICENSE_COMPATIBILITY = {
     ("epl-2.0", "unlicense"): "conditional",
     ("epl-2.0", "cc0-1.0"): "conditional",
     ("epl-2.0", "isc"): "conditional",
-    
     # CDDL-1.0 License compatibility
     ("cddl-1.0", "mit"): "conditional",
     ("cddl-1.0", "apache-2.0"): "conditional",
@@ -286,7 +295,6 @@ LICENSE_COMPATIBILITY = {
     ("cddl-1.0", "unlicense"): "conditional",
     ("cddl-1.0", "cc0-1.0"): "conditional",
     ("cddl-1.0", "isc"): "conditional",
-    
     # Unlicense compatibility
     ("unlicense", "mit"): "compatible",
     ("unlicense", "apache-2.0"): "compatible",
@@ -303,7 +311,6 @@ LICENSE_COMPATIBILITY = {
     ("unlicense", "unlicense"): "compatible",
     ("unlicense", "cc0-1.0"): "compatible",
     ("unlicense", "isc"): "compatible",
-    
     # CC0-1.0 License compatibility
     ("cc0-1.0", "mit"): "compatible",
     ("cc0-1.0", "apache-2.0"): "compatible",
@@ -320,7 +327,6 @@ LICENSE_COMPATIBILITY = {
     ("cc0-1.0", "unlicense"): "compatible",
     ("cc0-1.0", "cc0-1.0"): "compatible",
     ("cc0-1.0", "isc"): "compatible",
-    
     # ISC License compatibility
     ("isc", "mit"): "compatible",
     ("isc", "apache-2.0"): "compatible",
@@ -337,16 +343,13 @@ LICENSE_COMPATIBILITY = {
     ("isc", "unlicense"): "compatible",
     ("isc", "cc0-1.0"): "compatible",
     ("isc", "isc"): "compatible",
-    
     # Additional licenses
     ("artistic-2.0", "mit"): "incompatible",
     ("artistic-2.0", "gpl-2.0"): "compatible",
     ("artistic-2.0", "gpl-3.0"): "compatible",
-    
     ("ms-pl", "mit"): "incompatible",
     ("ms-pl", "gpl-2.0"): "incompatible",
     ("ms-pl", "ms-pl"): "compatible",
-    
     ("wtfpl", "mit"): "compatible",
     ("wtfpl", "apache-2.0"): "compatible",
     ("wtfpl", "gpl-2.0"): "compatible",
