@@ -239,7 +239,11 @@ class BurstDetector:
             merged_df["users"] = merged_df["users"].apply(lambda x: x if isinstance(x, list) else [])
             merged_df["estimated_count"] = merged_df["estimated_count"].fillna(0).astype(int)
             merged_df["estimated_ratio"] = merged_df["estimated_ratio"].fillna(0.0)
+<<<<<<< HEAD
             merged_df["has_estimated_dates"] = merged_df["has_estimated_dates"].fillna(False).infer_objects(copy=False)
+=======
+            merged_df["has_estimated_dates"] = merged_df["has_estimated_dates"].fillna(False)
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
             
             merged_df.sort_values("date", inplace=True)
             

@@ -7,7 +7,10 @@ from operator import itemgetter
 
 from starguard.api.github_api import GitHubAPI
 from starguard.utils.date_utils import make_naive_datetime
+<<<<<<< HEAD
 from dateutil.parser import parse as parse_date  
+=======
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +18,11 @@ logger = logging.getLogger(__name__)
 class MaintainerAnalyzer:
     """Analyzes repository maintainers for reputation and activity."""
     
+<<<<<<< HEAD
     def __init__(self, contributors: List[Dict], commits: List[Dict], github_api: GitHubAPI):
+=======
+    def __init__(self, contributors: List[Dict], commits: List[Dict], github_api: GitHubAPI): # Added github_api
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         self.contributors = contributors # From get_contributors
         self.commits = commits # From get_commits (recent)
         self.github_api = github_api # For fetching more maintainer details if needed
@@ -84,7 +91,11 @@ class MaintainerAnalyzer:
             })
         return top_n_maintainers
 
+<<<<<<< HEAD
     def check_recent_activity(self) -> Dict:
+=======
+    def check_recent_activity(self) -> Dict: # Primarily informational
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         """Check repository activity based on recent commits (from self.commits)."""
         if not self.commits: # self.commits are already for last 90 days
             return {
@@ -98,6 +109,7 @@ class MaintainerAnalyzer:
         last_commit_date_obj = None
         if self.commits:
             try:
+<<<<<<< HEAD
                 # Find the most recent commit date
                 most_recent_commit_dt = None
                 for c_data in self.commits:
@@ -124,6 +136,20 @@ class MaintainerAnalyzer:
                     except Exception as e:
                         logger.debug(f"Error parsing individual commit date '{date_str}': {e}")
                         continue
+=======
+                # Assuming commits are sorted by date by API, but re-sort to be sure
+                # Commits are usually returned most recent first from API.
+                # Find the most recent commit date.
+                most_recent_commit_dt = None
+                for c_data in self.commits:
+                    if isinstance(c_data, dict) and "commit" in c_data and \
+                       isinstance(c_data["commit"], dict) and "author" in c_data["commit"] and \
+                       isinstance(c_data["commit"]["author"], dict) and "date" in c_data["commit"]["author"]:
+                        
+                        commit_dt = make_naive_datetime(parse_date(c_data["commit"]["author"]["date"]))
+                        if commit_dt and (most_recent_commit_dt is None or commit_dt > most_recent_commit_dt):
+                            most_recent_commit_dt = commit_dt
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
                 
                 if most_recent_commit_dt:
                     last_commit_date_obj = most_recent_commit_dt
@@ -131,6 +157,7 @@ class MaintainerAnalyzer:
             except Exception as e:
                 logger.debug(f"Error parsing commit dates for activity check: {e}")
 
+<<<<<<< HEAD
         # Calculate days since last commit
         days_lapsed = 999  # Default fallback
         if last_commit_date_obj:
@@ -140,10 +167,17 @@ class MaintainerAnalyzer:
             except Exception as e:
                 logger.debug(f"Error calculating days since last commit: {e}")
                 days_lapsed = 999
+=======
+        days_lapsed = 999
+        if last_commit_date_obj:
+            days_lapsed = (make_naive_datetime(datetime.datetime.now()) - last_commit_date_obj).days
+            days_lapsed = max(0, days_lapsed) # Ensure non-negative
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
 
         # Determine activity level based on commits in last 90 days and recency
         activity_lvl_str = "inactive"
         commits_90d_count = len(self.commits)
+<<<<<<< HEAD
         
         if commits_90d_count > 20 and days_lapsed < 14: 
             activity_lvl_str = "high"
@@ -151,9 +185,19 @@ class MaintainerAnalyzer:
             activity_lvl_str = "medium"
         elif commits_90d_count > 0 and days_lapsed < 90: 
             activity_lvl_str = "low"
+=======
+        if commits_90d_count > 20 and days_lapsed < 14: activity_lvl_str = "high"
+        elif commits_90d_count > 5 and days_lapsed < 30: activity_lvl_str = "medium"
+        elif commits_90d_count > 0 and days_lapsed < 90 : activity_lvl_str = "low"
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         
         return {
             "activity_counts_by_period": {"last_90_days": commits_90d_count},
             "overall_activity_level": activity_lvl_str,
             "days_since_last_commit": days_lapsed
+<<<<<<< HEAD
         }
+=======
+        }
+
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc

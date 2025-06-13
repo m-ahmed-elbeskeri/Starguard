@@ -101,7 +101,11 @@ class GitHubContentMethods:
 
         Attempts to use GitHub's dependency graph API first, then falls back
         to parsing manifest files (package.json, requirements.txt, etc.)
+<<<<<<< HEAD
         if the API isn't available or returns empty results.
+=======
+        if the API isn't available.
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
 
         Args:
             owner: Repository owner
@@ -112,6 +116,7 @@ class GitHubContentMethods:
         """
         logger.info(f"Fetching dependencies for {owner}/{repo}")
         endpoint = f"/repos/{owner}/{repo}/dependency-graph/sbom"
+<<<<<<< HEAD
         
         # Try the dependency graph API first
         try:
@@ -146,6 +151,29 @@ class GitHubContentMethods:
 
         # Fallback: Parse manifest files
         logger.info(f"Falling back to file parsing for dependencies in {owner}/{repo}")
+=======
+        try:
+            # Try the dependency graph API first
+            response = self.request(endpoint)
+
+            if "error" not in response and "sbom" in response:
+                logger.info(f"Successfully fetched dependencies via API for {owner}/{repo}")
+                return response
+
+            logger.warning(
+                f"Could not fetch dependencies via API for {owner}/{repo} "
+                f"(Reason: {response.get('error', 'No SBOM field')}). "
+                f"Falling back to file parsing."
+            )
+
+        except Exception as e:
+            logger.warning(
+                f"Exception fetching dependencies via API for {owner}/{repo}: "
+                f"{str(e)}. Falling back to file parsing."
+            )
+
+        # Fallback: Parse manifest files
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         return self._parse_dependencies_from_files(owner, repo)
 
     def _parse_dependencies_from_files(self, owner: str, repo: str) -> Dict:
@@ -164,31 +192,46 @@ class GitHubContentMethods:
         """
         logger.info(f"Parsing dependency files for {owner}/{repo}")
         dependencies = {}
+<<<<<<< HEAD
         files_checked = 0
         files_found = 0
 
         for lang, config in PACKAGE_MANAGERS.items():
             try:
                 files_checked += 1
+=======
+
+        for lang, config in PACKAGE_MANAGERS.items():
+            try:
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
                 logger.debug(f"Checking for {lang} dependency file: {config['file']}")
                 content = self.get_file_content(owner, repo, config["file"])
 
                 if content:
+<<<<<<< HEAD
                     files_found += 1
                     logger.debug(f"Found {lang} dependency file ({len(content)} bytes), parsing...")
+=======
+                    logger.debug(f"Found {lang} dependency file, parsing...")
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
                     deps = self._parse_dependency_file(content, config, lang)
 
                     if deps:
                         dependencies[lang] = deps
+<<<<<<< HEAD
                         logger.info(f"Parsed {len(deps)} {lang} dependencies from {config['file']}")
                     else:
                         logger.debug(f"No dependencies found in {config['file']} for {lang}")
                 else:
                     logger.debug(f"No {config['file']} file found for {lang}")
+=======
+                        logger.debug(f"Parsed {len(deps)} {lang} dependencies")
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
 
             except Exception as e:
                 logger.debug(f"Could not parse {config['file']} for {owner}/{repo}: {str(e)}")
 
+<<<<<<< HEAD
         if files_found == 0:
             logger.warning(f"No dependency files found in {owner}/{repo} (checked {files_checked} possible files)")
         else:
@@ -197,6 +240,9 @@ class GitHubContentMethods:
         if not dependencies:
             logger.info(f"No dependencies parsed from any files in {owner}/{repo}")
             
+=======
+        logger.info(f"Parsed dependencies for {len(dependencies)} languages in {owner}/{repo}")
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         return dependencies
 
     def _parse_dependency_file(self, content: str, config: Dict, lang: str) -> List[Dict]:
@@ -232,24 +278,36 @@ class GitHubContentMethods:
                                     "type": "runtime" if key == "dependencies" else "development",
                                 }
                             )
+<<<<<<< HEAD
                 logger.debug(f"Parsed {len(deps)} dependencies from package.json")
+=======
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
             except json.JSONDecodeError as e:
                 logger.debug(f"JSONDecodeError parsing package.json: {e}")
 
         # Python (requirements.txt)
         elif lang == "python":
             pattern = re.compile(config["pattern"])
+<<<<<<< HEAD
             for line_num, line in enumerate(content.splitlines(), 1):
                 line = line.strip()
                 if line and not line.startswith("#") and not line.startswith("-"):
+=======
+            for line in content.splitlines():
+                line = line.strip()
+                if line and not line.startswith("#"):
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
                     match = pattern.match(line)
                     if match:
                         name = match.group(1)
                         version = match.group(2) if match.group(2) else "latest"
                         deps.append({"name": name, "version": version, "type": "runtime"})
+<<<<<<< HEAD
                     else:
                         logger.debug(f"Could not parse requirements.txt line {line_num}: {line}")
             logger.debug(f"Parsed {len(deps)} dependencies from requirements.txt")
+=======
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
 
         # Python (Pipfile)
         elif lang == "python_pipfile":
@@ -274,7 +332,10 @@ class GitHubContentMethods:
                     name = parts[0].strip().strip("\"'")
                     version = parts[1].strip().strip("\"'")
                     deps.append({"name": name, "version": version, "type": section_type})
+<<<<<<< HEAD
             logger.debug(f"Parsed {len(deps)} dependencies from Pipfile")
+=======
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
 
         # Python (pyproject.toml) - Poetry
         elif lang == "python_poetry":
@@ -289,7 +350,11 @@ class GitHubContentMethods:
                     in_dev_deps_section = False
                     section_type = "runtime"
                     continue
+<<<<<<< HEAD
                 elif "[tool.poetry.dev-dependencies]" in line or "[tool.poetry.group.dev.dependencies]" in line:
+=======
+                elif "[tool.poetry.dev-dependencies]" in line:
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
                     in_deps_section = False
                     in_dev_deps_section = True
                     section_type = "development"
@@ -303,7 +368,10 @@ class GitHubContentMethods:
                     (in_deps_section or in_dev_deps_section)
                     and not line.startswith("#")
                     and "=" in line
+<<<<<<< HEAD
                     and not line.startswith("python")  # Skip python version requirement
+=======
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
                 ):
                     # Extract package name (may be quoted)
                     name_match = re.match(r'^(["\']?)([a-zA-Z0-9_\-\.]+)\1\s*=\s*(.+)$', line)
@@ -325,7 +393,10 @@ class GitHubContentMethods:
                             version = version_spec
 
                         deps.append({"name": name, "version": version, "type": section_type})
+<<<<<<< HEAD
             logger.debug(f"Parsed {len(deps)} dependencies from pyproject.toml")
+=======
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
 
         # Ruby (Gemfile)
         elif lang == "ruby":
@@ -340,7 +411,10 @@ class GitHubContentMethods:
                         name = match.group(1)
                         version = match.group(2) if match.group(2) else "latest"
                         deps.append({"name": name, "version": version, "type": "runtime"})
+<<<<<<< HEAD
             logger.debug(f"Parsed {len(deps)} dependencies from Gemfile")
+=======
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
 
         # Java (pom.xml)
         elif lang == "java":
@@ -359,7 +433,10 @@ class GitHubContentMethods:
                 deps.append(
                     {"name": f"{group_id}:{artifact_id}", "version": version, "type": "runtime"}
                 )
+<<<<<<< HEAD
             logger.debug(f"Parsed {len(deps)} dependencies from pom.xml")
+=======
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
 
         # Go (go.mod)
         elif lang == "go":
@@ -407,7 +484,10 @@ class GitHubContentMethods:
                                 "type": "runtime",
                             }
                         )
+<<<<<<< HEAD
             logger.debug(f"Parsed {len(deps)} dependencies from go.mod")
+=======
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
 
         # PHP (composer.json)
         elif lang == "php":
@@ -423,7 +503,10 @@ class GitHubContentMethods:
                                 deps.append(
                                     {"name": name, "version": str(version), "type": dep_type}
                                 )
+<<<<<<< HEAD
                 logger.debug(f"Parsed {len(deps)} dependencies from composer.json")
+=======
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
             except json.JSONDecodeError as e:
                 logger.debug(f"JSONDecodeError parsing composer.json: {e}")
 
@@ -438,7 +521,10 @@ class GitHubContentMethods:
                 name = match[0]
                 version = match[1] if len(match) > 1 and match[1] else "latest"
                 deps.append({"name": name, "version": version, "type": "runtime"})
+<<<<<<< HEAD
             logger.debug(f"Parsed {len(deps)} dependencies from packages.config")
+=======
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
 
         # .NET (csproj or vbproj)
         elif lang == "dotnet_project":
@@ -453,7 +539,10 @@ class GitHubContentMethods:
                 name = package_ref[0]
                 version = package_ref[1] if len(package_ref) > 1 and package_ref[1] else "latest"
                 deps.append({"name": name, "version": version, "type": "runtime"})
+<<<<<<< HEAD
             logger.debug(f"Parsed {len(deps)} dependencies from .NET project file")
+=======
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
 
         # Rust (Cargo.toml)
         elif lang == "rust":
@@ -503,7 +592,10 @@ class GitHubContentMethods:
                             version = version_spec
 
                         deps.append({"name": name, "version": version, "type": section_type})
+<<<<<<< HEAD
             logger.debug(f"Parsed {len(deps)} dependencies from Cargo.toml")
+=======
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
 
         return deps
 
@@ -524,6 +616,7 @@ class GitHubContentMethods:
             try:
                 # Check if the package manager file exists
                 content = self.get_file_content(owner, repo, config["file"])
+<<<<<<< HEAD
                 if content and len(content.strip()) > 0:
                     detected.append(lang)
                     logger.debug(f"Detected {lang} package manager via {config['file']}")
@@ -531,6 +624,13 @@ class GitHubContentMethods:
                 logger.debug(f"Error checking for {lang} package manager: {e}")
 
         logger.info(f"Detected package managers for {owner}/{repo}: {detected}")
+=======
+                if content:
+                    detected.append(lang)
+            except Exception:
+                pass
+
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         return detected
 
     def check_for_security_issues(self, owner: str, repo: str) -> Dict:
@@ -552,4 +652,8 @@ class GitHubContentMethods:
             "has_vulnerabilities": False,
             "vulnerable_dependencies": [],
             "message": "Security scanning not implemented in this version",
+<<<<<<< HEAD
         }
+=======
+        }
+>>>>>>> d5db550d9587a3942a812e51e400250bb668badc
