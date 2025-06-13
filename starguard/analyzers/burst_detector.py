@@ -4,6 +4,7 @@ import datetime
 import logging
 import random
 import math
+import re
 from typing import Dict, List, Optional, Set, Tuple
 from collections import Counter, defaultdict
 
@@ -554,6 +555,143 @@ class BurstDetector:
             logger.error(f"Error cross-checking bursts for {self.owner}/{self.repo}: {str(e)}", exc_info=True)
             return self.bursts # Return original if error
 
+    def _analyze_username_patterns(self, username: str) -> float:
+        """Detect bot-like username patterns"""
+        if not username:
+            return 1.0
+        
+        suspicion_score = 0.0
+        
+        # Pattern 1: Random character sequences
+        if re.search(r'[a-z]{3,}\d{4,}$', username.lower()):  # like user1234
+            suspicion_score += 1.5
+        
+        # Pattern 2: Word + numbers pattern
+        if re.search(r'^[a-zA-Z]+\d+$', username) and len(username) > 8:
+            suspicion_score += 1.0
+        
+        # Pattern 3: Repeating patterns
+        if len(set(username.lower())) < len(username) * 0.6:  # Low character diversity
+            suspicion_score += 0.8
+        
+        # Pattern 4: GitHub default patterns
+        if re.search(r'github|user|account', username.lower()):
+            suspicion_score += 0.5
+        
+        return min(suspicion_score, 3.0)
+
+    def _analyze_interaction_quality(self, starred_repos: List[Dict]) -> float:
+        """Analyze quality of repository interactions"""
+        if not starred_repos:
+            return 2.0  # Suspicious if no starred repos
+        
+        suspicion_score = 0.0
+        
+        # Check for mass-starring patterns
+        repo_languages = [repo.get("language") for repo in starred_repos if repo.get("language")]
+        language_diversity = len(set(repo_languages)) / max(len(repo_languages), 1)
+        
+        if language_diversity < 0.3:  # Low diversity suggests bot behavior
+            suspicion_score += 1.5
+        
+        # Check for popular-only repositories (trend following)
+        high_star_repos = [r for r in starred_repos if r.get("stargazers_count", 0) > 1000]
+        if len(high_star_repos) / len(starred_repos) > 0.8:  # Only stars popular repos
+            suspicion_score += 1.0
+        
+        return min(suspicion_score, 3.0)
+
+    def _analyze_account_evolution(self, user_data: Dict) -> float:
+        """Analyze if account shows natural evolution"""
+        suspicion_score = 0.0
+        
+        followers = user_data.get("followers", 0)
+        following = user_data.get("following", 0)
+        public_repos = user_data.get("public_repos", 0)
+        
+        # Unnatural ratios
+        if followers > 0 and following / max(followers, 1) > 10:  # Following way more than followers
+            suspicion_score += 1.0
+        
+        if followers > 100 and public_repos == 0:  # Many followers but no repos
+            suspicion_score += 1.5
+        
+        # Check account age vs activity
+        try:
+            created_at = user_data.get("created_at")
+            if created_at:
+                account_age = (make_naive_datetime(datetime.datetime.now()) - 
+                              make_naive_datetime(parse_date(created_at))).days
+                
+                # Very new accounts with lots of activity
+                if account_age < 30 and (followers > 50 or public_repos > 10):
+                    suspicion_score += 2.0
+                elif account_age < 7:  # Very new accounts are suspicious
+                    suspicion_score += 1.0
+        except:
+            pass
+        
+        return min(suspicion_score, 3.0)
+
+    def _analyze_single_user_enhanced(self, user_data: Dict, starred_repos: List[Dict]) -> Dict:
+        """Enhanced user analysis with better heuristics"""
+        
+        # Current basic scoring
+        basic_score = self._calculate_basic_user_score(user_data)
+        
+        # Enhanced username pattern analysis
+        username_suspicion = self._analyze_username_patterns(user_data.get("login", ""))
+        
+        # Repository interaction quality
+        interaction_quality = self._analyze_interaction_quality(starred_repos)
+        
+        # Account evolution patterns
+        evolution_score = self._analyze_account_evolution(user_data)
+        
+        # Combine scores with weights
+        total_score = (
+            basic_score * 0.4 +
+            username_suspicion * 0.2 +
+            interaction_quality * 0.3 +
+            evolution_score * 0.1
+        )
+        
+        return {
+            "total_score": total_score,
+            "components": {
+                "basic": basic_score,
+                "username_pattern": username_suspicion,
+                "interaction_quality": interaction_quality,
+                "evolution": evolution_score
+            },
+            "likely_fake": total_score >= FAKE_USER_THRESHOLD * 0.8  # More conservative
+        }
+
+    def _calculate_basic_user_score(self, user_data: Dict) -> float:
+        """Calculate basic user score (existing logic)"""
+        score_breakdown = {}
+        
+        # 1. Account age
+        account_age_days_val = None
+        if user_data.get("created_at"):
+            created_at_dt = make_naive_datetime(parse_date(user_data["created_at"]))
+            if created_at_dt:
+                account_age_days_val = (make_naive_datetime(datetime.datetime.now()) - created_at_dt).days
+                age_thresh, age_score = USER_SCORE_THRESHOLDS["account_age_days"]
+                score_breakdown["account_age"] = _logistic_score(age_thresh - account_age_days_val, mid=0, max_score=age_score)
+        
+        # 2. Followers
+        followers_val = user_data.get("followers", 0)
+        foll_thresh, foll_score = USER_SCORE_THRESHOLDS["followers"]
+        score_breakdown["followers"] = _logistic_score(foll_thresh - followers_val, mid=0, max_score=foll_score)
+        
+        # 3. Public repos
+        pub_repos_val = user_data.get("public_repos", 0)
+        repo_thresh, repo_score = USER_SCORE_THRESHOLDS["public_repos"]
+        score_breakdown["public_repos"] = _logistic_score(repo_thresh - pub_repos_val, mid=0, max_score=repo_score)
+        
+        return sum(score_breakdown.values())
+
     def score_stargazers(self, max_users_to_score_per_burst: int = 10000, max_total_users_to_score: int = 10000) -> Dict:
         """Score stargazers in burst windows to identify likely fake accounts."""
         try:
@@ -732,9 +870,12 @@ class BurstDetector:
                         lockstep_thresh, lockstep_score = USER_SCORE_THRESHOLDS["lockstep_score"]
                         score_breakdown["lockstep"] = _logistic_score(lockstep_score_val - lockstep_thresh, mid=0, max_score=lockstep_score) if lockstep_score_val > lockstep_thresh else 0
                         
-                        # 9. Avatar hash comparison - commented out as in original
-
-                        final_total_score = sum(score_breakdown.values())
+                        # Enhanced analysis
+                        starred_repos = self.github_api.list_starred_repos(username, limit=100)
+                        enhanced_analysis = self._analyze_single_user_enhanced(user_profile, starred_repos)
+                        
+                        # Combine basic and enhanced scores
+                        final_total_score = sum(score_breakdown.values()) + enhanced_analysis["total_score"] * 0.3
                         
                         # Adjust score if we have estimated dates to be more conservative
                         if burst.get("has_estimated_dates", False):
@@ -754,9 +895,10 @@ class BurstDetector:
                             "tod_entropy": tod_entropy_val if events else None,
                             "lockstep_score": lockstep_score_val,
                             "score_components": score_breakdown,
+                            "enhanced_components": enhanced_analysis["components"],
                             "total_score": final_total_score,
                             "has_estimated_dates": burst.get("has_estimated_dates", False),
-                            "likely_fake_profile": final_total_score >= FAKE_USER_THRESHOLD
+                            "likely_fake_profile": final_total_score >= FAKE_USER_THRESHOLD * 0.8  # More conservative
                         }
                         all_user_scores[username] = user_eval
                     
@@ -793,12 +935,36 @@ class BurstDetector:
             return {
                 "burst_duration": 0,
                 "tod_entropy": 0.0,
-                "suspicious_patterns": []
+                "suspicious_patterns": [],
+                "has_estimated_dates": False
             }
             
-        # Extract timestamps and convert to datetime
-        star_dates = [make_naive_datetime(parse_date(s["starred_at"])) for s in stargazers]
+        # Extract timestamps and convert to datetime - FIXED: Handle None values
+        star_dates = []
+        has_estimated_dates = False
         
+        for s in stargazers:
+            starred_at = s.get("starred_at")
+            if starred_at:  # Only process if starred_at is not None/empty
+                try:
+                    parsed_date = make_naive_datetime(parse_date(starred_at))
+                    if parsed_date:
+                        star_dates.append(parsed_date)
+                        if s.get("date_is_estimated", False):
+                            has_estimated_dates = True
+                except Exception as e:
+                    logger.debug(f"Error parsing starred_at date '{starred_at}': {e}")
+                    continue
+        
+        if not star_dates:
+            logger.warning(f"No valid star dates found for {self.owner}/{self.repo}")
+            return {
+                "burst_duration": 0,
+                "tod_entropy": 0.0,
+                "suspicious_patterns": [],
+                "has_estimated_dates": has_estimated_dates
+            }
+            
         # Create daily counts
         date_counter = Counter([d.date() for d in star_dates])
         daily_stars = sorted(((d, c) for d, c in date_counter.items()), key=lambda x: x[0])
@@ -807,7 +973,8 @@ class BurstDetector:
             return {
                 "burst_duration": 0,
                 "tod_entropy": 0.0,
-                "suspicious_patterns": []
+                "suspicious_patterns": [],
+                "has_estimated_dates": has_estimated_dates
             }
             
         # Calculate 95th percentile threshold for burst detection
@@ -841,9 +1008,6 @@ class BurstDetector:
         # Time of day entropy
         hours = [d.hour for d in star_dates]
         tod_entropy = _entropy(hours)
-        
-        # Check if we're using estimated dates
-        has_estimated_dates = any(s.get("date_is_estimated", False) for s in stargazers)
         
         # Suspicious patterns detection
         suspicious_patterns = []
@@ -880,151 +1044,202 @@ class BurstDetector:
             "has_estimated_dates": has_estimated_dates
         }
 
+    def _calculate_user_diversity(self, burst: Dict) -> float:
+        """Calculate diversity of user patterns in a burst"""
+        user_evals = burst.get("user_evaluations", {})
+        if not user_evals:
+            return 0.0
+        
+        # Analyze diversity of user characteristics
+        characteristics = []
+        for user_eval in user_evals.values():
+            char_vector = [
+                user_eval.get("account_age_days", 0) / 365.0,  # Normalize to years
+                min(user_eval.get("followers", 0) / 100.0, 1.0),  # Cap at 100
+                min(user_eval.get("public_repos", 0) / 10.0, 1.0),  # Cap at 10
+            ]
+            characteristics.append(char_vector)
+        
+        if len(characteristics) < 2:
+            return 0.0
+        
+        # Calculate variance across dimensions
+        char_array = np.array(characteristics)
+        variance = np.mean(np.var(char_array, axis=0))
+        
+        return min(variance * 2, 1.0)  # Scale to 0-1
+
+    def _cross_validate_burst(self, current_burst: Dict, all_bursts: List[Dict]) -> float:
+        """Cross-validate burst characteristics against others"""
+        if len(all_bursts) < 2:
+            return 0.0
+        
+        current_fake_ratio = current_burst.get("fake_ratio_in_burst", 0)
+        other_ratios = [b.get("fake_ratio_in_burst", 0) for b in all_bursts if b != current_burst]
+        
+        if not other_ratios:
+            return 0.0
+        
+        # If this burst has much higher fake ratio than others, it's more suspicious
+        avg_other_ratio = sum(other_ratios) / len(other_ratios)
+        ratio_difference = current_fake_ratio - avg_other_ratio
+        
+        if ratio_difference > 0.3:  # Significantly higher
+            return 0.2
+        elif ratio_difference > 0.1:
+            return 0.1
+        
+        return 0.0
+
     def calculate_fake_star_index(self) -> Dict:
-        """Calculate the Fake Star Index for the repository."""
+        """Enhanced fake star index calculation with better confidence scoring"""
         default_return = {
             "has_fake_stars": False, "fake_star_index": 0.0, "risk_level": "low",
             "bursts": [], "total_stars_analyzed": 0, "total_likely_fake": 0,
-            "fake_percentage": 0.0, "worst_burst": None
+            "fake_percentage": 0.0, "worst_burst": None, "confidence_score": 0.0
         }
+        
         try:
-            scoring_result = self.score_stargazers() # This returns {"bursts": ..., "user_scores_cache": ...}
+            scoring_result = self.score_stargazers()
             processed_bursts = scoring_result.get("bursts", [])
-
+            
             if not processed_bursts:
                 logger.info(f"No bursts to analyze for fake star index for {self.owner}/{self.repo}.")
-                default_return["bursts"] = self.bursts # Return original bursts if any
                 return default_return
-
-            # Get temporal burst analysis
+            
+            # Enhanced temporal analysis
             temporal_analysis = self.analyze_temporal_bursts()
             has_estimated_dates = temporal_analysis.get("has_estimated_dates", False)
-
+            
+            # Calculate more sophisticated burst scores
             final_bursts_with_scores = []
+            confidence_factors = []
+            
             for burst in processed_bursts:
-                # Use the new keys from score_stargazers
                 fake_ratio = burst.get("fake_ratio_in_burst", 0)
-                # Normalize rule_hits (0-5 range now) to 0-1. Max 5 rules.
-                normalized_rule_hits = burst.get("rule_hits", 0) / 5.0 
+                rule_hits = burst.get("rule_hits", 0)
                 
-                # Apply temporal factors
-                temporal_factor = 0.0
+                # Enhanced scoring with multiple factors
+                base_score = (FAKE_RATIO_WEIGHT * fake_ratio) + (RULE_HITS_WEIGHT * (rule_hits / 5.0))
+                
+                # NEW: Time-of-day scoring
+                tod_factor = 0.0
                 tod_entropy = burst.get("tod_entropy", float('inf'))
-                if tod_entropy < 1.5 and not has_estimated_dates:
-                    temporal_factor = 0.2  # Add weight for suspicious time patterns
+                if tod_entropy < 1.0:  # Very suspicious
+                    tod_factor = 0.3
+                elif tod_entropy < 1.5:
+                    tod_factor = 0.15
                 
-                burst_score = (FAKE_RATIO_WEIGHT * fake_ratio) + (RULE_HITS_WEIGHT * normalized_rule_hits) + temporal_factor
+                # NEW: User diversity scoring
+                diversity_factor = 0.0
+                users_analyzed = burst.get("sampled_users_in_burst_count", 0)
+                if users_analyzed > 0:
+                    unique_patterns = self._calculate_user_diversity(burst)
+                    if unique_patterns < 0.5:  # Low diversity = suspicious
+                        diversity_factor = 0.2
                 
-                # Adjust score if using estimated dates
-                if burst.get("has_estimated_dates", False) or has_estimated_dates:
-                    # Reduce burst score by 25% when using estimated dates
-                    burst_score = burst_score * 0.75
-                    
-                burst_score = min(max(burst_score, 0.0), 1.0) # Clamp to 0-1
-
+                # NEW: Cross-validation with other bursts
+                cross_validation_factor = self._cross_validate_burst(burst, processed_bursts)
+                
+                # Combine all factors
+                burst_score = base_score + tod_factor + diversity_factor + cross_validation_factor
+                
+                # Adjust for estimated dates (more conservative)
+                if has_estimated_dates:
+                    burst_score *= 0.6  # Stronger reduction
+                    confidence_factors.append(0.6)
+                else:
+                    confidence_factors.append(0.9)
+                
+                burst_score = min(max(burst_score, 0.0), 1.0)
+                
+                # Enhanced verdict logic
                 verdict = "organic"
-                if burst_score >= BURST_FAKE_THRESHOLD: verdict = "fake"
-                elif burst_score >= BURST_ORGANIC_THRESHOLD: verdict = "suspicious"
+                if burst_score >= 0.7:  # Stricter threshold
+                    verdict = "fake"
+                elif burst_score >= 0.4:  # Adjusted threshold
+                    verdict = "suspicious"
                 
                 burst_copy = burst.copy()
                 burst_copy.update({
-                    "burst_score": burst_score, 
+                    "burst_score": burst_score,
                     "verdict": verdict,
-                    "temporal_factors": {
+                    "confidence_factors": {
                         "tod_entropy": tod_entropy,
-                        "suspicious_timing": tod_entropy < 1.5 and not has_estimated_dates
-                    },
-                    "has_estimated_dates": burst.get("has_estimated_dates", False) or has_estimated_dates
+                        "user_diversity": diversity_factor,
+                        "cross_validation": cross_validation_factor,
+                        "estimated_dates_penalty": has_estimated_dates
+                    }
                 })
                 
-                # Add warning if using estimated dates
-                if burst.get("has_estimated_dates", False) or has_estimated_dates:
-                    burst_copy["date_estimation_warning"] = "This burst analysis uses estimated dates and may be less accurate"
-                    
                 final_bursts_with_scores.append(burst_copy)
-
-            # Repo-level metrics based on all stars in all detected bursts 
-            total_stars_in_all_bursts = sum(b["stars"] for b in self.bursts if "stars" in b)
             
-            # Calculate weighted sum of likely fake stars from scored bursts
-            # Extrapolate if some bursts were not scored due to limits.
-            estimated_total_fake_in_bursts = 0
-            stars_in_scored_bursts = 0
-
-            for b_scored in final_bursts_with_scores:
-                if not b_scored.get("scoring_skipped", True) and "stars" in b_scored:
-                    stars_in_scored_bursts += b_scored["stars"]
-                    # Estimate fakes for this burst: ratio * stars_in_this_burst
-                    estimated_total_fake_in_bursts += b_scored.get("fake_ratio_in_burst", 0) * b_scored["stars"]
-
-            # Overall fake percentage across scored bursts
-            avg_fake_ratio_in_scored_bursts = (estimated_total_fake_in_bursts / stars_in_scored_bursts) \
-                                              if stars_in_scored_bursts > 0 else 0
+            # Repository-level index calculation
+            total_stars_in_bursts = sum(b["stars"] for b in self.bursts if "stars" in b)
             
-            # Extrapolate to all bursts if some were skipped
-            if total_stars_in_all_bursts > stars_in_scored_bursts and stars_in_scored_bursts > 0:
-                 stars_in_unscored_bursts = total_stars_in_all_bursts - stars_in_scored_bursts
-                 estimated_total_fake_in_bursts += avg_fake_ratio_in_scored_bursts * stars_in_unscored_bursts
+            if total_stars_in_bursts == 0:
+                return default_return
             
-            # Ensure it's an integer
-            estimated_total_fake_in_bursts = int(round(estimated_total_fake_in_bursts))
-
-            # Calculate repo index with temporal factors
-            repo_index_val = 0.0
-            if total_stars_in_all_bursts > 0:
-                # Weighted average of burst_score by stars in burst
-                weighted_score_sum = sum(b.get("burst_score", 0) * b.get("stars", 0) 
-                                        for b in final_bursts_with_scores if "stars" in b)
-                repo_index_val = weighted_score_sum / total_stars_in_all_bursts
+            # Weighted average by burst size and confidence
+            weighted_score = 0.0
+            total_weight = 0.0
+            
+            for burst in final_bursts_with_scores:
+                burst_stars = burst.get("stars", 0)
+                burst_score = burst.get("burst_score", 0)
+                weight = burst_stars * max(confidence_factors)  # Weight by confidence
                 
-                # Incorporate time-of-day entropy from temporal analysis if not using estimated dates
-                if not has_estimated_dates and temporal_analysis.get("tod_entropy", float('inf')) < 1.5:
-                    repo_index_val = min(1.0, repo_index_val + 0.2)  # Boost score for suspicious timing
-                    
-                # Add penalty for short bursts if not using estimated dates
-                if not has_estimated_dates and temporal_analysis.get("avg_burst_duration", 0) <= 2 and temporal_analysis.get("avg_burst_duration", 0) > 0:
-                    repo_index_val = min(1.0, repo_index_val + 0.15)  # Boost score for short bursts
-                
-            repo_index_val = min(max(repo_index_val, 0.0), 1.0) # Clamp
+                weighted_score += burst_score * weight
+                total_weight += weight
             
-            # Reduce index if using estimated dates to be more conservative
-            if has_estimated_dates:
-                repo_index_val = repo_index_val * 0.75  # 25% reduction
-                repo_index_val = min(max(repo_index_val, 0.0), 0.85)  # Cap at 0.85 to avoid definitive "fake" verdict
-
-            repo_risk_level = "low"
-            if repo_index_val >= BURST_FAKE_THRESHOLD: repo_risk_level = "high"
-            elif repo_index_val >= BURST_ORGANIC_THRESHOLD: repo_risk_level = "medium"
+            repo_index = weighted_score / total_weight if total_weight > 0 else 0.0
             
-            worst_burst_obj = None
-            if final_bursts_with_scores:
-                worst_burst_obj = max(final_bursts_with_scores, key=lambda b: b.get("burst_score", 0), default=None)
-
-            result = {
-                "has_fake_stars": repo_index_val > BURST_ORGANIC_THRESHOLD,
-                "fake_star_index": repo_index_val,
-                "risk_level": repo_risk_level,
-                "total_stars_analyzed": total_stars_in_all_bursts, # Stars in all detected bursts
-                "total_likely_fake": estimated_total_fake_in_bursts, # Estimated fakes across all bursts
-                "fake_percentage": (estimated_total_fake_in_bursts / total_stars_in_all_bursts * 100) if total_stars_in_all_bursts > 0 else 0.0,
-                "bursts": final_bursts_with_scores, # these are the processed ones
-                "worst_burst": worst_burst_obj,
-                "temporal_analysis": temporal_analysis
-            }
+            # Overall confidence calculation
+            overall_confidence = sum(confidence_factors) / len(confidence_factors) if confidence_factors else 0.0
+            
+            # Adjust final index based on confidence
+            if overall_confidence < 0.7:  # Low confidence
+                repo_index *= 0.8  # More conservative
+            
+            # Risk level with confidence consideration
+            risk_level = "low"
+            if repo_index >= 0.6 and overall_confidence > 0.7:
+                risk_level = "high"
+            elif repo_index >= 0.35 and overall_confidence > 0.6:
+                risk_level = "medium"
+            elif repo_index >= 0.6:  # High score but low confidence
+                risk_level = "medium"
+            
+            # Calculate total fake stars
+            total_fake_stars = sum(
+                b.get("fake_ratio_in_burst", 0) * b.get("stars", 0) 
+                for b in final_bursts_with_scores
+            )
+            
+            result = default_return.copy()
+            result.update({
+                "has_fake_stars": repo_index > 0.3,
+                "fake_star_index": repo_index,
+                "risk_level": risk_level,
+                "confidence_score": overall_confidence,
+                "bursts": final_bursts_with_scores,
+                "total_stars_analyzed": total_stars_in_bursts,
+                "total_likely_fake": int(total_fake_stars),
+                "fake_percentage": (total_fake_stars / total_stars_in_bursts * 100) if total_stars_in_bursts > 0 else 0.0,
+                "temporal_analysis": temporal_analysis,
+                "worst_burst": max(final_bursts_with_scores, key=lambda b: b.get("burst_score", 0)) if final_bursts_with_scores else None
+            })
             
             # Add warning if dates are estimated
             if has_estimated_dates:
                 result["warning"] = "This analysis uses estimated dates because precise star timestamps weren't available. Results may be less reliable."
                 result["dates_estimated"] = True
-
+            
             return result
-
+            
         except Exception as e:
-            logger.error(f"Error calculating fake star index for {self.owner}/{self.repo}: {str(e)}", exc_info=True)
-            default_return["error"] = str(e)
-            default_return["bursts"] = self.bursts # Return original bursts if error during processing
+            logger.error(f"Error calculating fake star index: {str(e)}", exc_info=True)
             return default_return
-
 
     def plot_star_history(self, save_path: str = None) -> None:
         """Plot star history with burst windows and anomalies highlighted."""

@@ -383,15 +383,12 @@ class GitHubApiMethods:
     def paginate(self, endpoint: str, params: Optional[Dict] = None, max_items: Optional[int] = None) -> List[Dict]:
         """
         Retrieve all pages of results for a paginated API endpoint.
-        
         Automatically handles GitHub's pagination to retrieve all results,
         or up to max_items if specified.
-        
         Args:
             endpoint: API endpoint path
             params: URL query parameters
             max_items: Maximum number of items to retrieve across all pages
-            
         Returns:
             List[Dict]: Combined results from all retrieved pages
         """
@@ -399,31 +396,59 @@ class GitHubApiMethods:
         params = params or {}
         if "per_page" not in params:
             params["per_page"] = 100  # Max items per page in GitHub API
-        
+
         results = []
         page = 1
-        
+        consecutive_errors = 0  # Track consecutive errors
+        max_consecutive_errors = 3
+
         while True:
             # Update params for current page
             page_params = params.copy()
             page_params["page"] = page
-            
+
             # Make the request for this page
             response = self.request(endpoint, params=page_params)
-            
+
             # Handle errors
             if isinstance(response, dict) and "error" in response:
+                consecutive_errors += 1
+                
                 if response.get("status_code") == 404:
-                    # Resource not found, return empty list
-                    return []
-                # Other error, log and return what we have so far
-                logger.warning(f"Error during pagination for {endpoint}: {response.get('error')}")
-                break
-            
+                    # Resource not found, return what we have
+                    logger.debug(f"Resource not found (404) for {endpoint}")
+                    return results
+                    
+                elif response.get("status_code") == 422:
+                    # GitHub pagination limit - check if it's about pagination
+                    error_msg = response.get("error", "").lower()
+                    if "pagination is limited" in error_msg:
+                        logger.warning(f"GitHub pagination limit reached for {endpoint} after {len(results)} items")
+                        # Return what we have so far rather than failing completely
+                        return results
+                    else:
+                        # Other 422 error
+                        logger.warning(f"422 error for {endpoint}: {response.get('error')}")
+                        if consecutive_errors >= max_consecutive_errors:
+                            logger.error(f"Too many consecutive errors for {endpoint}, stopping pagination")
+                            break
+                        continue
+                        
+                else:
+                    # Other error, log and potentially continue
+                    logger.warning(f"Error during pagination for {endpoint} (page {page}): {response.get('error')}")
+                    if consecutive_errors >= max_consecutive_errors:
+                        logger.error(f"Too many consecutive errors for {endpoint}, stopping pagination")
+                        break
+                    continue
+            else:
+                # Reset error counter on successful response
+                consecutive_errors = 0
+
             # No items returned, we've reached the end
             if not response or (isinstance(response, list) and len(response) == 0):
                 break
-            
+
             # Add this page's results
             if isinstance(response, list):
                 results.extend(response)
@@ -431,18 +456,19 @@ class GitHubApiMethods:
                 # If response is not a list, it's likely an error or unexpected format
                 logger.warning(f"Unexpected response format during pagination for {endpoint}")
                 break
-            
+
             # Check if we've reached max_items
             if max_items and len(results) >= max_items:
                 results = results[:max_items]  # Truncate to max_items
                 break
-            
+
             # Check if we have a next page
             if len(response) < params["per_page"]:
                 # Received fewer items than requested per page, must be the last page
                 break
-            
+
             # Move to next page
             page += 1
-        
+
+        logger.debug(f"Pagination complete for {endpoint}: retrieved {len(results)} items")
         return results

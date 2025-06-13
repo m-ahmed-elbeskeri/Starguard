@@ -116,11 +116,9 @@ class GitHubRestMethods:
     ) -> List[Dict]:
         """
         Get repository stargazers with timestamps using REST API.
-
         This is a core method for fake star detection. It retrieves a list
         of users who have starred the repository, along with when they
         starred it (if get_timestamps is True).
-
         Args:
             owner: Repository owner
             repo: Repository name
@@ -128,7 +126,6 @@ class GitHubRestMethods:
             days_limit: Limit to stars from the last X days.
                         Note: The REST API fetches all stargazers; filtering by days_limit
                         is applied post-fetch if days_limit > 0.
-
         Returns:
             List[Dict]: List of stargazer data with timestamps (if requested)
         """
@@ -136,16 +133,35 @@ class GitHubRestMethods:
         try:
             # For star timestamps, we need a special Accept header
             headers_backup = self.session.headers.copy()
-
             if get_timestamps:
                 self.session.headers["Accept"] = "application/vnd.github.v3.star+json"
                 logger.debug("Using star+json Accept header for timestamp data")
 
             # Endpoint for stargazers
             endpoint = f"/repos/{owner}/{repo}/stargazers"
-
-            # Fetch all pages of stargazers
-            raw_stars = self.paginate(endpoint)
+            
+            # Try to fetch all pages of stargazers with enhanced error handling
+            try:
+                raw_stars = self.paginate(endpoint)
+            except Exception as pagination_error:
+                # Handle GitHub pagination limits for very popular repositories
+                if "pagination is limited" in str(pagination_error).lower():
+                    logger.warning(f"GitHub pagination limit hit for {owner}/{repo}. Fetching available data...")
+                    # Try to get what we can with a single request
+                    try:
+                        single_page = self.request(endpoint, params={"per_page": 100})
+                        if isinstance(single_page, list):
+                            raw_stars = single_page
+                            logger.info(f"Retrieved {len(raw_stars)} stargazers (limited by GitHub pagination)")
+                        else:
+                            logger.error(f"Unexpected response format: {type(single_page)}")
+                            raw_stars = []
+                    except Exception as single_page_error:
+                        logger.error(f"Failed to get even single page of stargazers: {single_page_error}")
+                        raw_stars = []
+                else:
+                    # Re-raise if it's a different type of error
+                    raise pagination_error
 
             # Restore original headers
             self.session.headers = headers_backup
@@ -159,23 +175,23 @@ class GitHubRestMethods:
                     if get_timestamps and "starred_at" in star_entry and "user" in star_entry:
                         # Got real timestamp data from API
                         user_data = star_entry["user"]
-                        processed_star = {
-                            "starred_at": star_entry["starred_at"],
-                            "user": {
-                                "login": user_data.get("login"),
-                                "avatar_url": user_data.get("avatar_url"),
-                                "created_at": None,
-                                "followers_count": None,
-                                "public_repos": None,
-                                "starred_count": None,
-                            },
-                        }
-                        all_default_dates = False  # At least one real date
+                        if user_data:  # Ensure user_data is not None
+                            processed_star = {
+                                "starred_at": star_entry["starred_at"],
+                                "user": {
+                                    "login": user_data.get("login"),
+                                    "avatar_url": user_data.get("avatar_url"),
+                                    "created_at": None,
+                                    "followers_count": None,
+                                    "public_repos": None,
+                                    "starred_count": None,
+                                },
+                            }
+                            all_default_dates = False  # At least one real date
                     elif "login" in star_entry:
                         # Fallback for non-timestamped structure
-                        # Instead of a hardcoded date, mark it as needing estimation
                         processed_star = {
-                            "starred_at": None,  # Use None instead of "2020-01-01T00:00:00Z"
+                            "starred_at": None,  # Use None instead of hardcoded date
                             "needs_date_estimation": True,
                             "user": {
                                 "login": star_entry.get("login"),
@@ -189,12 +205,12 @@ class GitHubRestMethods:
                     else:
                         logger.debug(f"Skipping malformed star entry: {star_entry}")
                         continue  # Skip malformed entries
-
+                    
                     processed_stars.append(processed_star)
                 except Exception as e:
                     logger.debug(f"Error processing star entry: {e}")
-            
-            # If we need to estimate dates
+
+            # Handle date estimation if needed (same as before)
             if all_default_dates and processed_stars:
                 try:
                     # Try to get dates from GraphQL first if we have that method
@@ -208,7 +224,6 @@ class GitHubRestMethods:
                                 for star in graphql_stars
                                 if star.get("starred_at") and star.get("user", {}).get("login")
                             }
-                            
                             dates_applied = 0
                             for star in processed_stars:
                                 login = star.get("user", {}).get("login")
@@ -216,7 +231,6 @@ class GitHubRestMethods:
                                     star["starred_at"] = login_to_date[login]
                                     star["date_from_graphql"] = True
                                     dates_applied += 1
-                            
                             if dates_applied > 0:
                                 logger.debug(f"Applied {dates_applied} accurate dates from GraphQL")
                                 graphql_dates_applied = True
@@ -224,36 +238,30 @@ class GitHubRestMethods:
                         except Exception as e:
                             logger.warning(f"Error getting dates via GraphQL: {e}")
                     
-                    # If GraphQL didn't work, try distributing based on repo creation date
+                    # If GraphQL didn't work, distribute based on repo creation date
                     if all_default_dates:
                         # Get repo creation date as starting point
                         repo_data = self.get_repo(owner, repo)
                         created_at_str = repo_data.get("created_at")
-                        
                         if created_at_str:
                             from dateutil.parser import parse as parse_date
                             from starguard.utils.date_utils import make_naive_datetime
                             import datetime
-
                             # Parse and convert to naive datetime
                             repo_created = make_naive_datetime(parse_date(created_at_str))
                             now = make_naive_datetime(datetime.datetime.now())
-                            
                             # Distribute stars over time range
                             time_range = (now - repo_created).total_seconds()
                             total_stars = len(processed_stars)
-                            
                             for i, star in enumerate(processed_stars):
                                 if star.get("needs_date_estimation", False) or star.get("starred_at") is None:
                                     # Calculate a distributed date based on position
                                     position_ratio = i / max(1, total_stars - 1)
                                     offset_seconds = time_range * position_ratio
                                     estimated_date = repo_created + datetime.timedelta(seconds=offset_seconds)
-                                    
                                     # Format as ISO string like the GitHub API would return
                                     star["starred_at"] = estimated_date.isoformat() + "Z"
                                     star["date_is_estimated"] = True
-                                    
                                     # Clean up temporary flag
                                     if "needs_date_estimation" in star:
                                         del star["needs_date_estimation"]
@@ -261,50 +269,41 @@ class GitHubRestMethods:
                             # If repo creation date unavailable, distribute from last month to now
                             import datetime
                             from starguard.utils.date_utils import make_naive_datetime
-                            
                             now = make_naive_datetime(datetime.datetime.now())
                             month_ago = now - datetime.timedelta(days=30)
                             time_range = (now - month_ago).total_seconds()
                             total_stars = len(processed_stars)
-                            
                             for i, star in enumerate(processed_stars):
                                 if star.get("needs_date_estimation", False) or star.get("starred_at") is None:
                                     position_ratio = i / max(1, total_stars - 1)
                                     offset_seconds = time_range * position_ratio
                                     estimated_date = month_ago + datetime.timedelta(seconds=offset_seconds)
-                                    
                                     star["starred_at"] = estimated_date.isoformat() + "Z"
                                     star["date_is_estimated"] = True
-                                    
                                     if "needs_date_estimation" in star:
                                         del star["needs_date_estimation"]
-                                        
                 except Exception as e:
                     # If distribution fails, at least don't use all the same date
                     logger.warning(f"Error distributing dates: {e}. Using spaced default dates.")
                     import datetime
-                    
                     for i, star in enumerate(processed_stars):
                         if star.get("needs_date_estimation", False) or star.get("starred_at") is None:
                             # Space out by days to avoid triggering burst detection
                             date = datetime.datetime(2020, 1, 1) + datetime.timedelta(days=i)
                             star["starred_at"] = date.isoformat() + "Z"
                             star["date_is_estimated"] = True
-                            
                             if "needs_date_estimation" in star:
                                 del star["needs_date_estimation"]
 
-            # Apply days filter if requested
+            # Apply days filter if requested (same as before)
             if days_limit > 0 and processed_stars:
                 # Calculate cutoff date
                 import datetime
                 from dateutil.parser import parse as parse_date
                 from starguard.utils.date_utils import make_naive_datetime
-
                 cutoff_date = make_naive_datetime(
                     datetime.datetime.now() - datetime.timedelta(days=days_limit)
                 )
-
                 # Filter stars by date
                 filtered_stars = []
                 for star in processed_stars:
@@ -318,7 +317,6 @@ class GitHubRestMethods:
                             logger.debug(
                                 f"Could not parse date for star: {starred_at_str}, error: {e}"
                             )
-
                 logger.info(
                     f"Fetched {len(processed_stars)} total stars, filtered to {len(filtered_stars)} within {days_limit} days."
                 )
@@ -328,5 +326,5 @@ class GitHubRestMethods:
             return processed_stars
 
         except Exception as e:
-            logger.warning(f"Error fetching stargazers: {str(e)}")
+            logger.error(f"Error fetching stargazers: {str(e)}")
             return []
