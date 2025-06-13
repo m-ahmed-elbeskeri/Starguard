@@ -31,7 +31,6 @@ class StarGuard:
             tokens: One or more GitHub API tokens
         """
         self.github_api = GitHubAPI(tokens)
-<<<<<<< HEAD
         
         # Warn about analysis limitations without tokens
         if not self.github_api.token_manager.tokens:
@@ -43,17 +42,12 @@ class StarGuard:
                 "   - Rate limits are much lower (60 vs 5000 requests/hour)\n"
                 "   Get a token at: https://github.com/settings/tokens"
             )
-=======
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
 
     def analyze_repo(self, owner: str, repo: str, analyze_fake_stars: bool = True) -> Dict:
         """Perform comprehensive analysis on a GitHub repository."""
         logger.info(f"Starting analysis of {owner}/{repo}")
 
-<<<<<<< HEAD
         # Fetch basic repository data
-=======
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         try:
             repo_data = self.github_api.get_repo(owner, repo)
             logger.info(
@@ -63,15 +57,11 @@ class StarGuard:
             logger.error(f"Failed to fetch repository {owner}/{repo}: {e}")
             return {"error": str(e)}
 
-<<<<<<< HEAD
         # Fetch stargazers data
-=======
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         stars_raw_data = self.github_api.get_stargazers(
             owner, repo, get_timestamps=True, days_limit=0
         )
         logger.info(f"Fetched {len(stars_raw_data)} stargazers total.")
-<<<<<<< HEAD
         
         # Check if we're using estimated dates and warn user
         estimated_dates_count = sum(1 for star in stars_raw_data if star.get("date_is_estimated", False))
@@ -88,19 +78,12 @@ class StarGuard:
         logger.info(f"Fetched {len(contributors_data)} contributors.")
 
         # Fetch recent commits (last 90 days)
-=======
-
-        contributors_data = self.github_api.get_contributors(owner, repo)
-        logger.info(f"Fetched {len(contributors_data)} contributors.")
-
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         since_90d_iso = (
             make_naive_datetime(datetime.datetime.now()) - datetime.timedelta(days=90)
         ).isoformat()
         commits_recent_data = self.github_api.get_commits(owner, repo, since=since_90d_iso)
         logger.info(f"Fetched {len(commits_recent_data)} commits from last 90 days.")
 
-<<<<<<< HEAD
         # Fetch dependencies with improved error handling
         dependencies_raw_data = self.github_api.get_dependencies(owner, repo)
         dep_source = "API" if "sbom" in dependencies_raw_data else "File Parsing"
@@ -120,38 +103,15 @@ class StarGuard:
         star_analyzer_inst = StarAnalyzer(
             owner, repo, stars_raw_data, repo_data["created_at"], self.github_api
         )
-=======
-        dependencies_raw_data = self.github_api.get_dependencies(owner, repo)
-        logger.info(
-            f"Fetched raw dependency data (Source: {'API' if 'sbom' in dependencies_raw_data else 'File Parsing'})."
-        )
-
-        license_api_data = self.github_api.get_license(owner, repo)
-        logger.info(
-            f"Fetched license info: {license_api_data.get('license',{}).get('spdx_id', 'N/A')}"
-        )
-
-        burst_detector_inst = BurstDetector(owner, repo, self.github_api)
-
-        star_analyzer_inst = StarAnalyzer(
-            owner, repo, stars_raw_data, repo_data["created_at"], self.github_api
-        )
-
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         dependency_analyzer_inst = DependencyAnalyzer(dependencies_raw_data, self.github_api)
         license_analyzer_inst = LicenseAnalyzer(
             license_api_data, dependency_analyzer_inst.flat_dependencies
         )
-<<<<<<< HEAD
-=======
-
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         maintainer_analyzer_inst = MaintainerAnalyzer(
             contributors_data, commits_recent_data, self.github_api
         )
         code_analyzer_inst = CodeAnalyzer(owner, repo, self.github_api)
 
-<<<<<<< HEAD
         # Perform analyses with error handling
         logger.info("Running star pattern analysis...")
         try:
@@ -187,18 +147,6 @@ class StarGuard:
                     "worst_burst": None,
                     "error": str(e),
                 }
-=======
-        logger.info("Running star pattern analysis...")
-        star_analysis_results = star_analyzer_inst.detect_anomalies()
-
-        fake_star_analysis_results = None
-        if analyze_fake_stars:
-            logger.info("Running fake star detection (BurstDetector)...")
-            fake_star_analysis_results = star_analyzer_inst.detect_fake_stars()
-            fsi_val = fake_star_analysis_results.get("fake_star_index", 0.0)
-            fsi_risk = fake_star_analysis_results.get("risk_level", "low")
-            logger.info(f"Fake Star Index: {fsi_val:.2f} ({fsi_risk.upper()} RISK)")
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         else:
             fake_star_analysis_results = {
                 "has_fake_stars": False,
@@ -213,7 +161,6 @@ class StarGuard:
             }
 
         logger.info("Running dependency analysis...")
-<<<<<<< HEAD
         try:
             dependency_analysis_results = dependency_analyzer_inst.analyze()
         except Exception as e:
@@ -278,32 +225,6 @@ class StarGuard:
             package_registry_info = {"error": str(e)}
 
         # Prepare final result dictionary
-=======
-        dependency_analysis_results = dependency_analyzer_inst.analyze()
-
-        logger.info("Running license analysis...")
-        license_analysis_results = license_analyzer_inst.analyze()
-
-        logger.info("Running maintainer analysis...")
-        maintainer_analysis_results = maintainer_analyzer_inst.analyze()
-
-        logger.info("Running suspicious code pattern check...")
-        code_analysis_results = code_analyzer_inst.check_for_suspicious_patterns()
-
-        trust_calculator_inst = TrustScoreCalculator(
-            star_analysis_results,
-            dependency_analysis_results,
-            license_analysis_results,
-            maintainer_analysis_results,
-            fake_star_analysis_results,
-        )
-        trust_score_final = trust_calculator_inst.calculate()
-        badge_url_str = trust_calculator_inst.generate_badge_url(owner, repo)
-
-        activity_info_detailed = maintainer_analyzer_inst.check_recent_activity()
-        package_registry_info = dependency_analyzer_inst.check_in_package_registries()
-
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         final_result_dict = {
             "repository_info": {
                 "name": repo_data.get("name"),
@@ -327,7 +248,6 @@ class StarGuard:
                 "url": badge_url_str,
                 "markdown": f"[![StarGuard Score]({badge_url_str})](https://starguard.example.com/report/{owner}/{repo})",
             },
-<<<<<<< HEAD
             "analysis_metadata": {
                 "estimated_star_dates_ratio": estimated_ratio if 'estimated_ratio' in locals() else 0.0,
                 "has_github_token": bool(self.github_api.token_manager.tokens),
@@ -338,11 +258,6 @@ class StarGuard:
         
         logger.info(
             f"Analysis for {owner}/{repo} complete. Trust Score: {trust_score_final.get('total_score', 'N/A')}"
-=======
-        }
-        logger.info(
-            f"Analysis for {owner}/{repo} complete. Trust Score: {trust_score_final['total_score']}"
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         )
         return final_result_dict
 
@@ -352,10 +267,6 @@ class StarGuard:
             return f"Error: {analysis_result['error']}"
 
         if format_str == "json":
-<<<<<<< HEAD
-=======
-
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
             def dt_handler(o):
                 if isinstance(o, (datetime.datetime, datetime.date)):
                     return o.isoformat()
@@ -367,23 +278,16 @@ class StarGuard:
         trust_summary = analysis_result.get("trust_score_summary", {})
         fake_star_info = analysis_result.get("fake_star_detection_analysis", {})
         code_sus_info = analysis_result.get("code_suspicion_analysis", {})
-<<<<<<< HEAD
         analysis_meta = analysis_result.get("analysis_metadata", {})
-=======
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
 
         md_report_lines = []
         text_report_lines = []
 
-<<<<<<< HEAD
         # Header
-=======
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         title = f"StarGuard Analysis: {repo_info.get('full_name', 'N/A')}"
         md_report_lines.extend([f"# {title}", ""])
         text_report_lines.extend([title, "=" * len(title), ""])
 
-<<<<<<< HEAD
         # Analysis quality warnings
         if not analysis_meta.get("has_github_token", True):
             warning_text = "⚠️ **Analysis Limitation**: No GitHub token provided. Results may be less accurate."
@@ -399,10 +303,6 @@ class StarGuard:
         # Overview section
         overview_md = [
             "## Overview",
-=======
-        overview_md = [
-            "##  Overview Section",
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
             f"- **Repository**: [{repo_info.get('full_name','N/A')}]({repo_info.get('html_url','')})",
             f"- **Description**: {repo_info.get('description','N/A')}",
             f"- **Created**: {repo_info.get('created_at','N/A')}",
@@ -422,10 +322,7 @@ class StarGuard:
         md_report_lines.extend(overview_md)
         text_report_lines.extend(overview_text)
 
-<<<<<<< HEAD
         # Trust Score section
-=======
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         trust_score_val = trust_summary.get("total_score", "N/A")
         trust_risk_lvl = trust_summary.get("risk_level", "N/A").upper()
         md_report_lines.extend(
@@ -435,10 +332,7 @@ class StarGuard:
             [f"TRUST SCORE: {trust_score_val}/100 ({trust_risk_lvl} RISK)", ""]
         )
 
-<<<<<<< HEAD
         # Show fake star penalty if applied
-=======
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         penalty = trust_summary.get("fake_star_penalty_applied", 0)
         if penalty > 0:
             md_report_lines.append(
@@ -450,10 +344,7 @@ class StarGuard:
         md_report_lines.append("")
         text_report_lines.append("")
 
-<<<<<<< HEAD
         # Fake Star Detection section
-=======
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         if fake_star_info and fake_star_info.get("has_fake_stars"):
             fsi = fake_star_info.get("fake_star_index", 0.0)
             fsi_risk = fake_star_info.get("risk_level", "N/A").upper()
@@ -484,10 +375,7 @@ class StarGuard:
                 ]
             )
 
-<<<<<<< HEAD
             # Show burst details
-=======
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
             if fake_star_info.get("bursts"):
                 md_report_lines.append("### Suspicious Star Burst Details:")
                 text_report_lines.append("  Suspicious Star Burst Details:")
@@ -500,21 +388,13 @@ class StarGuard:
                     b_fake_ratio = burst_item.get("fake_ratio_in_burst", 0.0) * 100
 
                     md_report_lines.append(
-<<<<<<< HEAD
                         f"- **Burst {idx+1}**: {b_verdict} (Score: {b_score:.2f}), Period: {b_start} to {b_end}, Stars: +{b_stars}, Estimated Fake Ratio: {b_fake_ratio:.1f}%"
-=======
-                        f"- **Burst {idx+1}**: {b_verdict} (Score: {b_score:.2f}), Period: {b_start} to {b_end}, Stars: +{b_stars},  Estimated Fake Ratio: {b_fake_ratio:.1f}%"
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
                     )
                     text_report_lines.append(
                         f"    Burst {idx+1}: {b_verdict} (Score: {b_score:.2f})"
                     )
                     text_report_lines.append(
-<<<<<<< HEAD
                         f"      Period: {b_start} to {b_end}, Stars: +{b_stars}, Estimated Fake Ratio: {b_fake_ratio:.1f}%"
-=======
-                        f"      Period: {b_start} a {b_end}, Stars: +{b_stars}, Estimated Fake Ratio: {b_fake_ratio:.1f}%"
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
                     )
                 if len(fake_star_info["bursts"]) > 3:
                     md_report_lines.append("- ...and other bursts.")
@@ -525,10 +405,7 @@ class StarGuard:
             md_report_lines.extend(["## Fake Star Detection", f"_{fake_star_info['message']}_", ""])
             text_report_lines.extend(["Fake Star Detection:", f"  {fake_star_info['message']}", ""])
 
-<<<<<<< HEAD
         # Suspicious Code Detection section
-=======
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         if code_sus_info and code_sus_info.get("is_potentially_suspicious"):
             cs_score = code_sus_info.get("calculated_suspicion_score", 0)
             md_report_lines.extend(["## ⚠️ Suspicious Code Detection", ""])
@@ -548,10 +425,7 @@ class StarGuard:
                         text_report_lines.append(
                             f"    - {cat.replace('_',' ').title()}: {len(finds)} instances"
                         )
-<<<<<<< HEAD
             
-=======
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
             if code_sus_info.get("suspicious_package_elements"):
                 md_report_lines.append("Suspicious elements in package manifest:")
                 text_report_lines.append("  Suspicious elements in package manifest:")
@@ -561,20 +435,14 @@ class StarGuard:
             md_report_lines.append("")
             text_report_lines.append("")
 
-<<<<<<< HEAD
         # Component analysis sections
-=======
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         sections = {
             "Star Pattern Analysis": analysis_result.get("star_pattern_analysis"),
             "Dependency Health": analysis_result.get("dependency_health_analysis"),
             "License Compliance": analysis_result.get("license_compliance_analysis"),
             "Maintainer Activity": analysis_result.get("maintainer_activity_analysis"),
         }
-<<<<<<< HEAD
         
-=======
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         score_comp_map = trust_summary.get("score_components", {})
         score_key_map = {
             "Star Pattern Analysis": "star_pattern_score",
@@ -586,7 +454,6 @@ class StarGuard:
         for section_title, data in sections.items():
             if not data:
                 continue
-<<<<<<< HEAD
             
             score_val = score_comp_map.get(score_key_map.get(section_title), "N/A")
             max_score = {
@@ -595,12 +462,6 @@ class StarGuard:
                 "License Compliance": 20,
                 "Maintainer Activity": 15
             }.get(section_title, 20)
-=======
-            score_val = score_comp_map.get(score_key_map.get(section_title), "N/A")
-            max_score = (
-                50 if "Star" in section_title else 30 if "Dependency" in section_title else 20
-            )
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
 
             md_report_lines.extend(
                 [f"## {section_title}", f"**Component Score**: {score_val}/{max_score}", ""]
@@ -609,15 +470,11 @@ class StarGuard:
                 [f"{section_title.upper()}:", f"  Component Score: {score_val}/{max_score}", ""]
             )
 
-<<<<<<< HEAD
             # Add specific details for each section
-=======
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
             if section_title == "Star Pattern Analysis" and data.get("anomalies"):
                 num_anom = len(data["anomalies"])
                 md_report_lines.append(f"- Detected {num_anom} anomalies in star pattern.")
                 text_report_lines.append(f"  - Detected {num_anom} anomalies in star pattern.")
-<<<<<<< HEAD
                 
                 # Show detailed anomaly breakdown in text reports
                 if format_str != "json" and num_anom > 0:
@@ -632,8 +489,6 @@ class StarGuard:
                         md_report_lines.append(f"    - {date}: {stars} stars (Z-score: {z_score:.2f}, Method: {method})")
                         text_report_lines.append(f"      {date}: {stars} stars (Z-score: {z_score:.2f}, Method: {method})")
                         
-=======
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
             elif section_title == "Dependency Health" and data.get("stats"):
                 stats = data["stats"]
                 md_report_lines.append(
@@ -659,10 +514,7 @@ class StarGuard:
             md_report_lines.append("")
             text_report_lines.append("")
 
-<<<<<<< HEAD
         # Badge section
-=======
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
         badge_info = analysis_result.get("generated_badge", {})
         if badge_info.get("url"):
             md_report_lines.extend(["## Badge", "", badge_info["markdown"], ""])
@@ -671,8 +523,4 @@ class StarGuard:
         if format_str == "markdown":
             return "\n".join(md_report_lines)
         else:
-<<<<<<< HEAD
             return "\n".join(text_report_lines)
-=======
-            return "\n".join(text_report_lines)
->>>>>>> d5db550d9587a3942a812e51e400250bb668badc
