@@ -1,0 +1,44 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: pypi-publish
+    permissions:
+      id-token: write
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0  # Get all history to ensure latest commits
+    
+    - name: Debug Repository Contents
+      run: |
+        echo "Current directory: $(pwd)"
+        echo "List of files in repository root:"
+        ls -la
+        echo "Git commit hash: $(git rev-parse HEAD)"
+        echo "Latest commit on pyproject.toml:"
+        git log -1 --pretty=format:"%H %cd" -- pyproject.toml || echo "File not found in git"
+        echo "File content if exists:"
+        cat pyproject.toml || echo "File not found on disk"
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        
+    - name: Install build dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install build
+        
+    - name: Build package
+      run: python -m build
+      
+    - name: Publish package
+      uses: pypa/gh-action-pypi-publish@release/v1
