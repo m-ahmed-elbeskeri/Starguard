@@ -70,7 +70,16 @@ def _logistic_score(x: float,
                    steepness: float = 0.3,
                    max_score: float = 2.0) -> float:
     """Smooth monotone mapping → (0, max_score]."""
-    return max_score / (1 + math.exp(steepness * (x - mid)))
+    # Prevent overflow by clamping the exponent argument
+    exponent_arg = steepness * (x - mid)
+    
+    # Clamp to prevent overflow: exp(700) ≈ 1e304, exp(-700) ≈ 0
+    if exponent_arg > 700:
+        return 0.0  # When exponent is very large, 1/(1+exp(large)) ≈ 0
+    elif exponent_arg < -700:
+        return max_score  # When exponent is very negative, 1/(1+exp(small)) ≈ max_score
+    else:
+        return max_score / (1 + math.exp(exponent_arg))
 
 
 class LockStepDetector:
@@ -668,263 +677,313 @@ class BurstDetector:
         }
 
     def _calculate_basic_user_score(self, user_data: Dict) -> float:
-        """Calculate basic user score (existing logic)"""
+        """Calculate basic user score (FIXED LOGIC)"""
         score_breakdown = {}
         
-        # 1. Account age
+        # 1. Account age - FIXED: older accounts should get lower scores (less suspicious)
         account_age_days_val = None
         if user_data.get("created_at"):
             created_at_dt = make_naive_datetime(parse_date(user_data["created_at"]))
             if created_at_dt:
                 account_age_days_val = (make_naive_datetime(datetime.datetime.now()) - created_at_dt).days
                 age_thresh, age_score = USER_SCORE_THRESHOLDS["account_age_days"]
-                score_breakdown["account_age"] = _logistic_score(age_thresh - account_age_days_val, mid=0, max_score=age_score)
+                # FIXED: older accounts (higher age) should get lower suspicion scores
+                score_breakdown["account_age"] = _logistic_score(account_age_days_val - age_thresh, mid=0, max_score=age_score)
         
-        # 2. Followers
+        # 2. Followers - FIXED: more followers should get lower scores (less suspicious)
         followers_val = user_data.get("followers", 0)
         foll_thresh, foll_score = USER_SCORE_THRESHOLDS["followers"]
-        score_breakdown["followers"] = _logistic_score(foll_thresh - followers_val, mid=0, max_score=foll_score)
+        # FIXED: more followers should get lower suspicion scores
+        score_breakdown["followers"] = _logistic_score(followers_val - foll_thresh, mid=0, max_score=foll_score)
         
-        # 3. Public repos
+        # 3. Public repos - FIXED: more repos should get lower scores (less suspicious)
         pub_repos_val = user_data.get("public_repos", 0)
         repo_thresh, repo_score = USER_SCORE_THRESHOLDS["public_repos"]
-        score_breakdown["public_repos"] = _logistic_score(repo_thresh - pub_repos_val, mid=0, max_score=repo_score)
+        # FIXED: more repos should get lower suspicion scores
+        score_breakdown["public_repos"] = _logistic_score(pub_repos_val - repo_thresh, mid=0, max_score=repo_score)
         
         return sum(score_breakdown.values())
 
-    def score_stargazers(self, max_users_to_score_per_burst: int = 10000, max_total_users_to_score: int = 10000) -> Dict:
+    def score_stargazers(self,
+                        max_users_to_score_per_burst: int = 10_000,
+                        max_total_users_to_score: int = 10_000
+                        ) -> Dict:
         """Score stargazers in burst windows to identify likely fake accounts."""
         try:
-            if not self.bursts: self.cross_check_bursts()
-            if not self.bursts: return {"bursts": [], "user_scores": {}}
+            # Early exit if there are no bursts
+            if not self.bursts:
+                self.cross_check_bursts()  # Try to detect and cross-check bursts first
+            if not self.bursts:
+                return {"bursts": [], "user_scores": {}}
 
             all_user_scores = {}
             scored_bursts_output = []
-            total_users_scored_so_far = 0
+            total_users_scored = 0
 
-            # Prioritize scoring users from more suspicious bursts
-            # Sort bursts by a suspicion score (e.g., rule_hits desc, then stars desc)
-            sorted_bursts_for_scoring = sorted(
-                self.bursts, 
-                key=lambda b: (b.get("inorganic_heuristic", False), b.get("rule_hits", 0), b.get("stars", 0)),
+            # 1) Sort bursts by suspicion
+            sorted_bursts = sorted(
+                self.bursts,
+                key=lambda b: (
+                    b.get("inorganic_heuristic", False),
+                    b.get("rule_hits", 0),
+                    b.get("stars", 0),
+                ),
                 reverse=True
             )
 
-            # Get all stargazers once to build a lock-step detector
-            all_stargazers = set()
-            for burst in self.bursts:
-                all_stargazers.update(burst.get("users", []))
-                
-            # Limit total users for performance
-            if len(all_stargazers) > LOCKSTEP_DETECTION["max_users"]:
-                all_stargazers = set(random.sample(list(all_stargazers), LOCKSTEP_DETECTION["max_users"]))
-                
-            # Build user_to_repos mapping for lock-step detection
+            # 2) Gather unique stargazers (cap for lock-step)
+            all_stargazers = {u for b in self.bursts for u in b.get("users", [])}
+            max_ls = LOCKSTEP_DETECTION["max_users"]
+            if len(all_stargazers) > max_ls:
+                all_stargazers = set(random.sample(list(all_stargazers), max_ls))
+
+            # 3) Build lock-step detector map
             user_to_repos = {}
             for username in all_stargazers:
                 try:
-                    starred_repos = self.github_api.list_starred_repos(username, limit=200)
-                    user_to_repos[username] = {r["full_name"] for r in starred_repos}
-                except Exception as e:
-                    logger.debug(f"Error getting starred repos for {username}: {str(e)}")
+                    starred = self.github_api.list_starred_repos(username, limit=200)
+                    user_to_repos[username] = {r["full_name"] for r in starred}
+                except Exception:
                     user_to_repos[username] = set()
-                    
-            # Create lock-step detector
-            lockstep_detector = LockStepDetector(user_to_repos)
-            cluster_scores = lockstep_detector.cluster_scores()
+            cluster_scores = LockStepDetector(user_to_repos).cluster_scores()
 
-            # Process each burst
-            for burst_idx, burst in enumerate(sorted_bursts_for_scoring):
-                if total_users_scored_so_far >= max_total_users_to_score:
-                    logger.info(f"Reached max total users to score ({max_total_users_to_score}). Skipping further user scoring.")
-                    # Add remaining bursts without user scores, or with minimal info
-                    burst_copy = burst.copy()
-                    burst_copy.update({
-                        "user_scores": {}, "likely_fake_users": [], "likely_fake_count": 0,
-                        "sampled_users_count": 0, "fake_ratio": 0,
-                        "scoring_skipped": True
+            # 4) Score each burst
+            for burst_idx, burst in enumerate(sorted_bursts):
+                # Enforce total-users cap
+                if total_users_scored >= max_total_users_to_score:
+                    skipped = burst.copy()
+                    skipped.update({
+                        "user_evaluations": {},
+                        "likely_fake_users_in_burst": [],
+                        "likely_fake_count_in_burst": 0,
+                        "sampled_users_in_burst_count": 0,
+                        "fake_ratio_in_burst": 0.0,
+                        "scoring_skipped": True,
                     })
-                    scored_bursts_output.append(burst_copy)
+                    scored_bursts_output.append(skipped)
                     continue
 
-                users_in_burst = burst.get("users", [])
-                if not users_in_burst:
-                    scored_bursts_output.append(burst) # Add as is if no users
+                users = burst.get("users", [])
+                if not users:
+                    scored_bursts_output.append(burst)
                     continue
 
-                # Sample users from this burst
-                users_to_score_this_burst = users_in_burst
-                if len(users_in_burst) > max_users_to_score_per_burst:
-                    users_to_score_this_burst = random.sample(users_in_burst, max_users_to_score_per_burst)
-                
-                # Further limit if close to max_total_users_to_score
-                remaining_total_slots = max_total_users_to_score - total_users_scored_so_far
-                if len(users_to_score_this_burst) > remaining_total_slots:
-                    users_to_score_this_burst = users_to_score_this_burst[:remaining_total_slots]
+                # Sample per-burst if too many
+                to_score = users
+                if len(to_score) > max_users_to_score_per_burst:
+                    to_score = random.sample(to_score, max_users_to_score_per_burst)
+                # Don't exceed global cap
+                remaining = max_total_users_to_score - total_users_scored
+                if len(to_score) > remaining:
+                    to_score = to_score[:remaining]
 
-                burst_user_evals = {} # Renamed from burst_user_scores to avoid confusion with final score
-                likely_fake_usernames_in_burst = []
+                burst_evals = {}
+                likely_fakes = []
+                desc = f"Scoring burst {burst_idx+1}/{len(sorted_bursts)} ({burst.get('start_date')})"
+                for username in tqdm(to_score, desc=desc, disable=len(to_score) < 10):
+                    if not username:
+                        continue
 
-                desc = f"Scoring users in burst {burst_idx+1}/{len(sorted_bursts_for_scoring)} ({burst['start_date']})"
-                for username in tqdm(users_to_score_this_burst, desc=desc, disable=len(users_to_score_this_burst) < 10):
-                    if not username: continue # Skip if username is None or empty
-
-                    if username in all_user_scores: # Already scored globally
+                    if username in all_user_scores:
                         user_eval = all_user_scores[username]
                     else:
-                        user_profile = self.github_api.get_user(username)
-                        if not user_profile or "login" not in user_profile: # Ensure profile is valid
-                            logger.debug(f"Skipping scoring for {username}, profile not found or invalid.")
-                            continue 
-                        
+                        profile = self.github_api.get_user(username)
+                        if not profile or "login" not in profile:
+                            continue
+
                         score_breakdown = {}
-                        # 1. Account age
-                        account_age_days_val = None
-                        if user_profile.get("created_at"):
-                            created_at_dt = make_naive_datetime(parse_date(user_profile["created_at"]))
-                            if created_at_dt:
-                                account_age_days_val = (make_naive_datetime(datetime.datetime.now()) - created_at_dt).days
-                                age_thresh, age_score = USER_SCORE_THRESHOLDS["account_age_days"]
-                                score_breakdown["account_age"] = _logistic_score(age_thresh - account_age_days_val, mid=0, max_score=age_score)
-                        
-                        # 2. Followers
-                        followers_val = user_profile.get("followers", 0)
-                        foll_thresh, foll_score = USER_SCORE_THRESHOLDS["followers"]
-                        score_breakdown["followers"] = _logistic_score(foll_thresh - followers_val, mid=0, max_score=foll_score)
-                        
-                        # 3. Public repos
-                        pub_repos_val = user_profile.get("public_repos", 0)
-                        repo_thresh, repo_score = USER_SCORE_THRESHOLDS["public_repos"]
-                        score_breakdown["public_repos"] = _logistic_score(repo_thresh - pub_repos_val, mid=0, max_score=repo_score)
 
-                        # 4. User's total starred repos (expensive, uses GraphQL)
-                        user_total_stars_val = None
-                        # Check if other scores already push this over the threshold to save API call
-                        current_score_sum = sum(score_breakdown.values())
-                        stars_component_max_score = USER_SCORE_THRESHOLDS["total_stars"][1]
+                        # 1. Account age - FIXED: older accounts should get lower scores (less suspicious)
+                        age_days = None
+                        if profile.get("created_at"):
+                            dt = make_naive_datetime(parse_date(profile["created_at"]))
+                            if dt:
+                                age_days = (make_naive_datetime(datetime.datetime.now()) - dt).days
+                                thresh, max_s = USER_SCORE_THRESHOLDS["account_age_days"]
+                                # FIXED: older accounts get lower suspicion scores
+                                score_breakdown["account_age"] = _logistic_score(
+                                    age_days - thresh, mid=0, max_score=max_s
+                                )
 
-                        if current_score_sum + stars_component_max_score < FAKE_USER_THRESHOLD : # Only query if it can make a difference
-                            gql_query_user_stars = f"""query {{ user(login: "{username}") {{ starredRepositories {{ totalCount }} }} }}"""
-                            gql_result = self.github_api.graphql_request(gql_query_user_stars)
-                            if gql_result and not gql_result.get("errors") and gql_result.get("data", {}).get("user"):
-                                user_total_stars_val = gql_result["data"]["user"].get("starredRepositories", {}).get("totalCount")
-                        
-                        if user_total_stars_val is not None:
-                            star_thresh, star_score_val = USER_SCORE_THRESHOLDS["total_stars"]
-                            score_breakdown["total_stars"] = _logistic_score(star_thresh - user_total_stars_val, mid=0, max_score=star_score_val)
-                        else: # If GraphQL failed or skipped
-                             score_breakdown["total_stars"] = 0 # Neutral or slightly suspicious if cannot fetch
+                        # 2. Followers - FIXED: more followers should get lower scores (less suspicious)
+                        foll = profile.get("followers", 0)
+                        thresh, max_s = USER_SCORE_THRESHOLDS["followers"]
+                        # FIXED: more followers get lower suspicion scores
+                        score_breakdown["followers"] = _logistic_score(
+                            foll - thresh, mid=0, max_score=max_s
+                        )
 
-                        # 5. Prior interaction with THIS repo
-                        interaction_data = self.github_api.check_user_repo_interaction(self.owner, self.repo, username)
-                        has_prior_interaction = interaction_data.get("has_any_interaction", False)
-                        _, interact_score = USER_SCORE_THRESHOLDS["prior_interaction"]
-                        score_breakdown["prior_interaction"] = interact_score if not has_prior_interaction else 0
-                        
-                        # 6. Default avatar
-                        has_default_avatar_flag = "avatar_url" in user_profile and \
-                                                  ("gravatar.com/avatar/00000000000000000000000000000000" in user_profile["avatar_url"] or \
-                                                   "avatars.githubusercontent.com/u/0?" in user_profile["avatar_url"] or \
-                                                   "identicons" in user_profile["avatar_url"] or # Common for default
-                                                   "no-avatar" in user_profile["avatar_url"]) # Check for common default patterns
-                        _, avatar_score = USER_SCORE_THRESHOLDS["default_avatar"]
-                        score_breakdown["default_avatar"] = avatar_score if has_default_avatar_flag else 0
+                        # 3. Public repos - FIXED: more repos should get lower scores (less suspicious)
+                        repos = profile.get("public_repos", 0)
+                        thresh, max_s = USER_SCORE_THRESHOLDS["public_repos"]
+                        # FIXED: more repos get lower suspicion scores
+                        score_breakdown["public_repos"] = _logistic_score(
+                            repos - thresh, mid=0, max_score=max_s
+                        )
 
-                        # 7. Get user events for activity pattern analysis
-                        events = None
-                        if hasattr(self.github_api, 'list_user_events'):
+                        # 4. Total stars - FIXED: more stars should get lower scores (less suspicious)
+                        total_stars = None
+                        current_sum = sum(score_breakdown.values())
+                        star_thresh, star_max = USER_SCORE_THRESHOLDS["total_stars"]
+                        if current_sum + star_max >= FAKE_USER_THRESHOLD:
+                            q = (
+                                f'query {{ user(login: "{username}") '
+                                '{ starredRepositories {{ totalCount }} } }}'
+                            )
+                            res = self.github_api.graphql_request(q)
+                            if res and not res.get("errors") and res.get("data", {}).get("user"):
+                                total_stars = (
+                                    res["data"]["user"]["starredRepositories"]["totalCount"]
+                                )
+                        if total_stars is not None:
+                            # FIXED: more stars get lower suspicion scores
+                            score_breakdown["total_stars"] = _logistic_score(
+                                total_stars - star_thresh, mid=0, max_score=star_max
+                            )
+                        else:
+                            score_breakdown["total_stars"] = 0.0
+
+                        # 5. Prior interaction (no interaction → penalty)
+                        interaction = self.github_api.check_user_repo_interaction(
+                            self.owner, self.repo, username
+                        )
+                        _, interact_pen = USER_SCORE_THRESHOLDS["prior_interaction"]
+                        has_interaction = interaction.get("has_any_interaction", False)
+                        score_breakdown["prior_interaction"] = 0.0 if has_interaction else interact_pen
+
+                        # 6. Default avatar (default → penalty)
+                        avatar_url = profile.get("avatar_url", "")
+                        default_flag = any(tok in avatar_url for tok in (
+                            "00000000000000000000000000000000",
+                            "avatars.githubusercontent.com/u/0?",
+                            "identicons",
+                            "no-avatar",
+                        ))
+                        _, avatar_pen = USER_SCORE_THRESHOLDS["default_avatar"]
+                        score_breakdown["default_avatar"] = avatar_pen if default_flag else 0.0
+
+                        # 7. Activity patterns (these are correctly implemented - higher values = more suspicious)
+                        events = []
+                        if hasattr(self.github_api, "list_user_events"):
                             events = self.github_api.list_user_events(username, per_page=300)
-                        
+
+                        longest_inactivity_val = None
+                        gini_val = None
+                        entropy_val = None
+
                         if events:
-                            # 7.1 Longest inactivity period
-                            longest_inactivity_val = 0
-                            if len(events) >= 2:
-                                event_dates = sorted([make_naive_datetime(parse_date(e["created_at"])) for e in events])
-                                gaps = [(event_dates[i+1] - event_dates[i]).days for i in range(len(event_dates)-1)]
-                                longest_inactivity_val = max(gaps) if gaps else 0
-                                
-                            inactivity_thresh, inactivity_score = USER_SCORE_THRESHOLDS["longest_inactivity"]
-                            score_breakdown["longest_inactivity"] = _logistic_score(longest_inactivity_val - inactivity_thresh, mid=0, max_score=inactivity_score) if longest_inactivity_val > inactivity_thresh else 0
-                            
-                            # 7.2 Contribution dispersion (Gini coefficient)
-                            contribution_gini_val = 0.0
-                            if events:
-                                weeks = [make_naive_datetime(parse_date(e["created_at"])).isocalendar()[1] for e in events]
-                                week_counts = Counter(weeks).values()
-                                contribution_gini_val = _gini(list(week_counts))
-                                
-                            gini_thresh, gini_score = USER_SCORE_THRESHOLDS["contribution_gini"]
-                            score_breakdown["contribution_gini"] = _logistic_score(contribution_gini_val - gini_thresh, mid=0, max_score=gini_score) if contribution_gini_val > gini_thresh else 0
-                            
-                            # 7.3 Time-of-day entropy
-                            tod_entropy_val = 0.0
-                            if events:
-                                hours = [make_naive_datetime(parse_date(e["created_at"])).hour for e in events]
-                                tod_entropy_val = _entropy(hours)
-                                
-                            entropy_thresh, entropy_score = USER_SCORE_THRESHOLDS["tod_entropy"]
-                            score_breakdown["tod_entropy"] = entropy_score if tod_entropy_val < entropy_thresh else 0
-                        
-                        # 8. Lock-step behavior
-                        lockstep_score_val = cluster_scores.get(username, 0.0)
-                        lockstep_thresh, lockstep_score = USER_SCORE_THRESHOLDS["lockstep_score"]
-                        score_breakdown["lockstep"] = _logistic_score(lockstep_score_val - lockstep_thresh, mid=0, max_score=lockstep_score) if lockstep_score_val > lockstep_thresh else 0
-                        
+                            dates = sorted(
+                                make_naive_datetime(parse_date(e["created_at"]))
+                                for e in events
+                            )
+                            if len(dates) >= 2:
+                                gaps = [
+                                    (dates[i+1] - dates[i]).days
+                                    for i in range(len(dates)-1)
+                                ]
+                                longest_inactivity_val = max(gaps)
+                            else:
+                                longest_inactivity_val = 0
+                            in_thresh, in_max = USER_SCORE_THRESHOLDS["longest_inactivity"]
+                            # CORRECT: longer inactivity = more suspicious = higher score
+                            score_breakdown["longest_inactivity"] = (
+                                _logistic_score(longest_inactivity_val - in_thresh,
+                                                mid=0, max_score=in_max)
+                                if longest_inactivity_val > in_thresh else 0.0
+                            )
+
+                            # Contribution Gini - CORRECT: higher Gini = more suspicious = higher score
+                            from collections import Counter
+                            weeks = [
+                                make_naive_datetime(parse_date(e["created_at"])).isocalendar()[1]
+                                for e in events
+                            ]
+                            counts = Counter(weeks).values()
+                            gini_val = _gini(list(counts))
+                            g_thresh, g_max = USER_SCORE_THRESHOLDS["contribution_gini"]
+                            score_breakdown["contribution_gini"] = (
+                                _logistic_score(gini_val - g_thresh,
+                                                mid=0, max_score=g_max)
+                                if gini_val > g_thresh else 0.0
+                            )
+
+                            # Time-of-day entropy - CORRECT: lower entropy = more suspicious = higher score
+                            hours = [
+                                make_naive_datetime(parse_date(e["created_at"])).hour
+                                for e in events
+                            ]
+                            entropy_val = _entropy(hours)
+                            ent_thresh, ent_max = USER_SCORE_THRESHOLDS["tod_entropy"]
+                            score_breakdown["tod_entropy"] = (
+                                ent_max if entropy_val < ent_thresh else 0.0
+                            )
+
+                        # 8. Lock-step behavior - CORRECT: higher lockstep score = more suspicious = higher score
+                        ls_val = cluster_scores.get(username, 0.0)
+                        ls_thresh, ls_max = USER_SCORE_THRESHOLDS["lockstep_score"]
+                        score_breakdown["lockstep"] = (
+                            _logistic_score(ls_val - ls_thresh, mid=0, max_score=ls_max)
+                            if ls_val > ls_thresh else 0.0
+                        )
+
                         # Enhanced analysis
-                        starred_repos = self.github_api.list_starred_repos(username, limit=100)
-                        enhanced_analysis = self._analyze_single_user_enhanced(user_profile, starred_repos)
-                        
-                        # Combine basic and enhanced scores
-                        final_total_score = sum(score_breakdown.values()) + enhanced_analysis["total_score"] * 0.3
-                        
-                        # Adjust score if we have estimated dates to be more conservative
+                        starred100 = self.github_api.list_starred_repos(username, limit=100)
+                        enhanced = self._analyze_single_user_enhanced(profile, starred100)
+
+                        # Combine scores & adjust for estimated dates
+                        total_score = sum(score_breakdown.values()) + enhanced["total_score"] * 0.3
                         if burst.get("has_estimated_dates", False):
-                            # Reduce the final score by 20% to avoid false positives with estimated dates
-                            final_total_score = final_total_score * 0.8
-                        
+                            total_score *= 0.8
+
                         user_eval = {
                             "username": username,
-                            "account_age_days": account_age_days_val,
-                            "followers": followers_val,
-                            "public_repos": pub_repos_val,
-                            "total_stars_by_user": user_total_stars_val, # Renamed for clarity
-                            "has_interaction_with_repo": has_prior_interaction,
-                            "has_default_avatar": has_default_avatar_flag,
-                            "longest_inactivity": longest_inactivity_val if events else None,
-                            "contribution_gini": contribution_gini_val if events else None,
-                            "tod_entropy": tod_entropy_val if events else None,
-                            "lockstep_score": lockstep_score_val,
+                            "account_age_days": age_days,
+                            "followers": foll,
+                            "public_repos": repos,
+                            "total_stars_by_user": total_stars,
+                            "has_interaction_with_repo": has_interaction,
+                            "has_default_avatar": default_flag,
+                            "longest_inactivity": longest_inactivity_val,
+                            "contribution_gini": gini_val,
+                            "tod_entropy": entropy_val,
+                            "lockstep_score": ls_val,
                             "score_components": score_breakdown,
-                            "enhanced_components": enhanced_analysis["components"],
-                            "total_score": final_total_score,
+                            "enhanced_components": enhanced["components"],
+                            "total_score": total_score,
                             "has_estimated_dates": burst.get("has_estimated_dates", False),
-                            "likely_fake_profile": final_total_score >= FAKE_USER_THRESHOLD * 0.8  # More conservative
+                            "likely_fake_profile": total_score >= FAKE_USER_THRESHOLD * 0.8
                         }
+
                         all_user_scores[username] = user_eval
-                    
-                    burst_user_evals[username] = user_eval
-                    if user_eval["likely_fake_profile"]:
-                        likely_fake_usernames_in_burst.append(username)
-                    total_users_scored_so_far +=1
-                    if total_users_scored_so_far >= max_total_users_to_score: break # Break inner loop too
 
-                burst_copy = burst.copy() # Work on a copy
-                burst_copy.update({
-                    "user_evaluations": burst_user_evals, # Store evaluations for this burst
-                    "likely_fake_users_in_burst": likely_fake_usernames_in_burst,
-                    "likely_fake_count_in_burst": len(likely_fake_usernames_in_burst),
-                    "sampled_users_in_burst_count": len(burst_user_evals),
-                    "fake_ratio_in_burst": len(likely_fake_usernames_in_burst) / len(burst_user_evals) if burst_user_evals else 0,
-                    "scoring_skipped": False
+                    # Record evaluation
+                    burst_evals[username] = all_user_scores[username]
+                    if burst_evals[username]["likely_fake_profile"]:
+                        likely_fakes.append(username)
+
+                    total_users_scored += 1
+                    if total_users_scored >= max_total_users_to_score:
+                        break
+
+                # Summarize this burst
+                out = burst.copy()
+                out.update({
+                    "user_evaluations":             burst_evals,
+                    "likely_fake_users_in_burst":   likely_fakes,
+                    "likely_fake_count_in_burst":   len(likely_fakes),
+                    "sampled_users_in_burst_count": len(burst_evals),
+                    "fake_ratio_in_burst":          (len(likely_fakes) / len(burst_evals)
+                                                    if burst_evals else 0.0),
+                    "scoring_skipped":              False
                 })
-                scored_bursts_output.append(burst_copy)
+                scored_bursts_output.append(out)
 
-            return {"bursts": scored_bursts_output, "user_scores_cache": all_user_scores}
+            # Return unified structure
+            return {"bursts": scored_bursts_output, "user_scores": all_user_scores}
 
         except Exception as e:
-            logger.error(f"Error scoring stargazers for {self.owner}/{self.repo}: {str(e)}", exc_info=True)
-            # Return original bursts, so subsequent steps don't fail on missing keys
-            return {"bursts": self.bursts, "user_scores_cache": {}}
+            logger.error(f"Error in score_stargazers: {e}", exc_info=True)
+            return {"bursts": self.bursts if hasattr(self, 'bursts') else [], "user_scores": {}}
 
     def analyze_temporal_bursts(self) -> Dict:
         """Analyze temporal burst features at repo level."""

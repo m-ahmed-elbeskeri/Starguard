@@ -52,7 +52,7 @@ PACKAGE_MANAGERS = {
 }
 
 # Constants for fake star detection
-MAD_THRESHOLD = 2.5 * 1.48  # MAD threshold for spike detection
+MAD_THRESHOLD = 3 * 1.48  # MAD threshold for spike detection
 WINDOW_SIZE = 28  # Days for sliding window in MAD calculation
 MIN_STAR_COUNT = 30  # Minimum star count before using MAD detection
 MIN_STARS_GROWTH_PERCENT = 300  # Alternative % growth threshold for small repos
@@ -60,15 +60,15 @@ MIN_STARS_GROWTH_PERCENT = 300  # Alternative % growth threshold for small repos
 # More conservative fake star user scoring thresholds
 USER_SCORE_THRESHOLDS = {
     "account_age_days": (60, 2.0),  # Increased from 30 to 60 days
-    "followers": (3, 1.0),          # Decreased from 5 to 3
-    "public_repos": (1, 1.0),       # Decreased from 2 to 1  
-    "total_stars": (5, 1.0),        # Increased from 3 to 5
-    "prior_interaction": (0, 1.5),  # Increased penalty
-    "default_avatar": (True, 0.8),  # Increased penalty
+    "followers": (5, 1.0),          # Decreased from 5 to 3
+    "public_repos": (2, 1.0),       # Decreased from 2 to 1  
+    "total_stars": (3, 1.0),        # Increased from 3 to 5
+    "prior_interaction": (0, 0),  # Increased penalty
+    "default_avatar": (True, 0.5),  # Increased penalty
     "longest_inactivity": (60, 1.0), # Decreased from 90
-    "contribution_gini": (0.7, 1.0), # Increased from 0.6
-    "lockstep_score": (0.03, 2.0),   # Decreased threshold, increased penalty
-    "tod_entropy": (1.8, 1.5)        # Increased threshold and penalty
+    "contribution_gini": (0.6, 1.0), # Increased from 0.6
+    "lockstep_score": (0.05, 2.0),   # Decreased threshold, increased penalty
+    "tod_entropy": (1.2, 1.5)        # Increased threshold and penalty
 }
 
 # Lock-step detection settings
@@ -82,7 +82,7 @@ LOCKSTEP_DETECTION = {
 AVATAR_HASH_DISTANCE = 8  # Perceptual hash distance threshold for similar avatars
 AVATAR_MATCH_SCORE = 0.5  # Score to add for avatar reuse detection
 
-FAKE_USER_THRESHOLD = 4.0  # Score threshold to flag a user as likely fake
+FAKE_USER_THRESHOLD = 4.5  # Score threshold to flag a user as likely fake
 
 # Burst scoring weights
 FAKE_RATIO_WEIGHT = 0.7
